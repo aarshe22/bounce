@@ -12,11 +12,19 @@ class BounceProcessor {
     public function __construct($config, $readOnly = false) {
         $this->config = $config;
         $this->readOnly = (bool)$readOnly;
-        $this->db = new PDO("sqlite:" . $this->config['db_path']);
-        $this->db->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
-        $this->db->exec('PRAGMA journal_mode=WAL');
-        $this->db->exec('PRAGMA synchronous=NORMAL');
-        $this->db->exec('PRAGMA busy_timeout = 10000');
+        $dsn = "sqlite:" . $this->config['db_path'];
+        $options = [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION];
+        if ($this->readOnly && defined('PDO::SQLITE_ATTR_OPEN_FLAGS')) {
+            $options[PDO::SQLITE_ATTR_OPEN_FLAGS] = SQLITE3_OPEN_READONLY;
+        }
+        $this->db = new PDO($dsn, null, null, $options);
+        if (!$this->readOnly) {
+            $this->db->exec('PRAGMA journal_mode=WAL');
+            $this->db->exec('PRAGMA synchronous=NORMAL');
+            $this->db->exec('PRAGMA busy_timeout = 10000');
+        } else {
+            $this->db->exec('PRAGMA busy_timeout = 5000');
+        }
         if (!$this->readOnly) {
             $this->createDatabaseTables();
         }
@@ -504,6 +512,22 @@ class BounceProcessor {
     public function getActivityLogs() {
         try {
             $stmt = $this->db->query("SELECT * FROM activity_logs ORDER BY timestamp DESC");
+            return $stmt->fetchAll(PDO::FETCH_ASSOC);
+        } catch (Exception $e) {
+            error_log("Database error: " . $e->getMessage());
+            return [];
+        }
+    }
+
+    public function getActivityLogsSince($sinceId = 0, $limit = 200) {
+        try {
+            if ($sinceId > 0) {
+                $stmt = $this->db->prepare("SELECT * FROM activity_logs WHERE id > ? ORDER BY id ASC LIMIT ?");
+                $stmt->execute([$sinceId, (int)$limit]);
+            } else {
+                $stmt = $this->db->prepare("SELECT * FROM activity_logs ORDER BY id DESC LIMIT ?");
+                $stmt->execute([(int)$limit]);
+            }
             return $stmt->fetchAll(PDO::FETCH_ASSOC);
         } catch (Exception $e) {
             error_log("Database error: " . $e->getMessage());

@@ -45,7 +45,7 @@ function flash($key) {
 }
 
 // Handle form submissions
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
+if ((($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') && isset($_POST['action'])) {
     try {
         switch ($_POST['action']) {
             case 'add_mailbox':
