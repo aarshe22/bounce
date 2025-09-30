@@ -529,16 +529,16 @@ class BounceProcessor {
         }
 
         $write('MAIL FROM: <' . $fromEmail . '>'); if ($verbose) { $this->logActivity('SMTP', 'C: MAIL FROM: <' . $fromEmail . '>'); }
-        $read();
+        $resp = $read(); if ($verbose) { $this->logActivity('SMTP', 'S: ' . trim($resp)); }
         // Support multiple recipients separated by comma
         $recipients = array_map('trim', explode(',', $to));
         foreach ($recipients as $rcpt) {
             if ($rcpt === '') continue;
             $write('RCPT TO: <' . $rcpt . '>'); if ($verbose) { $this->logActivity('SMTP', 'C: RCPT TO: <' . $rcpt . '>'); }
-            $read();
+            $rcptResp = $read(); if ($verbose) { $this->logActivity('SMTP', 'S: ' . trim($rcptResp)); }
         }
         $write('DATA'); if ($verbose) { $this->logActivity('SMTP', 'C: DATA'); }
-        $read();
+        $dataReady = $read(); if ($verbose) { $this->logActivity('SMTP', 'S: ' . trim($dataReady)); }
 
         $headers = [];
         $headers[] = 'From: ' . sprintf('%s <%s>', $fromName, $fromEmail);
@@ -546,10 +546,12 @@ class BounceProcessor {
         $headers[] = 'Subject: ' . $subject;
         $headers[] = 'MIME-Version: 1.0';
         $headers[] = 'Content-Type: text/plain; charset=UTF-8';
-        $message = implode("\r\n", $headers) . "\r\n\r\n" . $body . "\r\n.";
-        if ($verbose) { $this->logActivity('SMTP', 'C: [headers+body+\".\"]'); }
+        $headers[] = 'Date: ' . gmdate('D, d M Y H:i:s \G\M\T');
+        $headers[] = 'Message-ID: <' . bin2hex(random_bytes(8)) . '@' . (parse_url('https://' . ($smtp['host'] ?? 'localhost'), PHP_URL_HOST)) . '>';
+        $message = implode("\r\n", $headers) . "\r\n\r\n" . $body . "\r\n.\r\n";
+        if ($verbose) { $this->logActivity('SMTP', 'C: [headers+body+<CRLF>.<CRLF>]'); }
         $write($message);
-        $read();
+        $final = $read(); if ($verbose) { $this->logActivity('SMTP', 'S: ' . trim($final)); }
         $write('QUIT'); if ($verbose) { $this->logActivity('SMTP', 'C: QUIT'); }
         fclose($fp);
         return true;
