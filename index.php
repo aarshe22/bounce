@@ -3,6 +3,33 @@
 session_start();
 require_once 'bounce.php';
 
+// Lightweight JSON endpoint for live activity logs
+if (isset($_GET['fetch_activity'])) {
+    header('Content-Type: application/json');
+    $sinceId = isset($_GET['since']) ? (int)$_GET['since'] : 0;
+    try {
+        // Fetch logs newer than sinceId
+        $dbLogs = $processor->getActivityLogs();
+        $result = [];
+        foreach ($dbLogs as $row) {
+            if (!empty($sinceId) && (int)$row['id'] <= $sinceId) {
+                continue;
+            }
+            $result[] = [
+                'id' => (int)$row['id'],
+                'timestamp' => $row['timestamp'],
+                'action' => $row['action'],
+                'details' => $row['details']
+            ];
+        }
+        echo json_encode(['logs' => $result]);
+    } catch (Throwable $e) {
+        http_response_code(500);
+        echo json_encode(['error' => $e->getMessage()]);
+    }
+    exit;
+}
+
 // Flash helpers
 function flash($key) {
     if (!empty($_SESSION[$key])) {
@@ -255,6 +282,26 @@ $smtpSettings = $processor->getSmtpSettings();
             </div>
         </div>
 
+        <!-- Live Activity Log -->
+        <div class="row mb-4">
+            <div class="col-12">
+                <h2 class="d-flex align-items-center"><i class="fas fa-terminal me-2"></i>Live Activity</h2>
+                <div class="card">
+                    <div class="card-body">
+                        <div class="d-flex justify-content-between align-items-center mb-2">
+                            <div class="text-muted small">Streams recent actions including IMAP activity and processing steps.</div>
+                            <div>
+                                <button id="logToggleBtn" class="btn btn-sm btn-outline-primary">Start Live Log</button>
+                                <button id="logClearBtn" class="btn btn-sm btn-outline-secondary ms-1">Clear</button>
+                            </div>
+                        </div>
+                        <pre id="liveLog" style="height: 240px; overflow: auto; background:#0b1220; color:#cfe3ff; padding:12px; border-radius:6px; margin:0;">
+                        </pre>
+                    </div>
+                </div>
+            </div>
+        </div>
+
         <!-- Mailboxes Section -->
         <div class="row mb-4">
             <div class="col-12">
@@ -450,6 +497,8 @@ $smtpSettings = $processor->getSmtpSettings();
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
     <script>
         let currentDeleteId = null;
+        let liveLogInterval = null;
+        let lastLogId = 0;
 
         function showAddModal() {
             document.getElementById('actionInput').value = 'add_mailbox';
@@ -498,6 +547,45 @@ $smtpSettings = $processor->getSmtpSettings();
                 form.submit();
             }
         }
+
+        function appendLogLine(line) {
+            const pre = document.getElementById('liveLog');
+            pre.textContent += (pre.textContent ? "\n" : "") + line;
+            pre.scrollTop = pre.scrollHeight;
+        }
+
+        async function fetchLogsOnce() {
+            try {
+                const res = await fetch('?fetch_activity=1&since=' + lastLogId, { cache: 'no-store' });
+                if (!res.ok) return;
+                const data = await res.json();
+                if (data && Array.isArray(data.logs)) {
+                    for (const row of data.logs) {
+                        lastLogId = Math.max(lastLogId, row.id);
+                        appendLogLine(`[${row.timestamp}] ${row.action} - ${row.details || ''}`.trim());
+                    }
+                }
+            } catch (e) {
+                // swallow
+            }
+        }
+
+        document.getElementById('logToggleBtn').addEventListener('click', () => {
+            if (liveLogInterval) {
+                clearInterval(liveLogInterval);
+                liveLogInterval = null;
+                document.getElementById('logToggleBtn').textContent = 'Start Live Log';
+            } else {
+                fetchLogsOnce();
+                liveLogInterval = setInterval(fetchLogsOnce, 2000);
+                document.getElementById('logToggleBtn').textContent = 'Stop Live Log';
+            }
+        });
+
+        document.getElementById('logClearBtn').addEventListener('click', () => {
+            document.getElementById('liveLog').textContent = '';
+            lastLogId = 0;
+        });
     </script>
 </body>
 </html>
