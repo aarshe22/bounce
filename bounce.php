@@ -36,6 +36,8 @@ class BounceProcessor {
             error_message TEXT,
             timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
             processed BOOLEAN DEFAULT 0,
+            original_to TEXT,
+            cc_addresses TEXT,
             FOREIGN KEY (mailbox_id) REFERENCES mailboxes (id)
         )");
 
@@ -45,6 +47,16 @@ class BounceProcessor {
             details TEXT,
             timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
         )");
+        
+        $this->db->exec("CREATE TABLE IF NOT EXISTS test_settings (
+            id INTEGER PRIMARY KEY,
+            enabled INTEGER DEFAULT 0,
+            recipients TEXT
+        )");
+        
+        // Initialize test settings if not exists
+        $stmt = $this->db->prepare("INSERT OR IGNORE INTO test_settings (id, enabled, recipients) VALUES (1, 0, '')");
+        $stmt->execute();
     }
 
     public function logActivity($action, $details = '') {
@@ -107,6 +119,22 @@ class BounceProcessor {
         }
     }
 
+    public function getTestSettings() {
+        $stmt = $this->db->query("SELECT * FROM test_settings WHERE id=1");
+        return $stmt->fetch(PDO::FETCH_ASSOC);
+    }
+
+    public function updateTestSettings($enabled, $recipients) {
+        try {
+            $stmt = $this->db->prepare("UPDATE test_settings SET enabled=?, recipients=? WHERE id=1");
+            $result = $stmt->execute([$enabled, $recipients]);
+            return $result;
+        } catch (Exception $e) {
+            error_log("Database error: " . $e->getMessage());
+            return false;
+        }
+    }
+
     public function processBounces($mailboxId, $limit = 50) {
         try {
             // Get mailbox details
@@ -118,16 +146,19 @@ class BounceProcessor {
                 throw new Exception("Mailbox not found");
             }
             
+            // Get test settings
+            $testSettings = $this->getTestSettings();
+            $isTestMode = (bool)$testSettings['enabled'];
+            
             // Connect to IMAP
             $imapPath = "{" . $mailbox['host'] . ":" . $mailbox['port'] . "/imap/ssl}INBOX";
-            $connection = imap_open($imapPath, $mailbox['username'], password_verify('temp', $mailbox['password']) ? $mailbox['password'] : '');
+            $connection = imap_open($imapPath, $mailbox['username'], $mailbox['password']);
             
             if (!$connection) {
                 throw new Exception("IMAP connection failed: " . imap_last_error());
             }
             
             // Search for unread bounce messages
-            $bouncePattern = implode(' ', $this->config['bounce_patterns']);
             $search = 'UNSEEN';
             $emails = imap_search($connection, $search);
             
@@ -160,9 +191,44 @@ class BounceProcessor {
                     // Extract email address from bounce message
                     $emailAddress = $from; // Simplified - in real system would parse bounce content
                     
+                    // Get full message for parsing
+                    $rawMessage = imap_fetchbody($connection, $emailNumber, 1.1);
+                    if (empty($rawMessage)) {
+                        $rawMessage = imap_fetchbody($connection, $emailNumber, 1);
+                    }
+                    
+                    // Parse email headers for original to and cc addresses
+                    $originalTo = '';
+                    $ccAddresses = [];
+                    
+                    if (!$isTestMode) {
+                        // In normal mode, extract original to and CC from message
+                        $headers = imap_fetchheader($connection, $emailNumber);
+                        
+                        // Extract To address
+                        if (preg_match('/To:\s*(.*?)(?:\r\n|\n)/i', $headers, $matches)) {
+                            $originalTo = trim($matches[1]);
+                        }
+                        
+                        // Extract CC addresses
+                        if (preg_match_all('/Cc:\s*(.*?)(?:\r\n|\n)/i', $headers, $matches)) {
+                            foreach ($matches[1] as $cc) {
+                                $ccAddresses = array_merge($ccAddresses, explode(',', $cc));
+                            }
+                            // Clean up CC addresses
+                            $ccAddresses = array_map('trim', $ccAddresses);
+                            $ccAddresses = array_filter($ccAddresses);
+                        }
+                    }
+                    
                     // Log the bounce
-                    $stmt = $this->db->prepare("INSERT INTO bounce_logs (mailbox_id, email_address, subject, error_code, error_message) VALUES (?, ?, ?, ?, ?)");
-                    $stmt->execute([$mailboxId, $emailAddress, $subject, '550', 'Mailbox unavailable']);
+                    $stmt = $this->db->prepare("INSERT INTO bounce_logs (mailbox_id, email_address, subject, error_code, error_message, original_to, cc_addresses) VALUES (?, ?, ?, ?, ?, ?, ?)");
+                    $stmt->execute([$mailboxId, $emailAddress, $subject, '550', 'Mailbox unavailable', $originalTo, implode(',', $ccAddresses)]);
+                    
+                    // In test mode, send to override recipients
+                    if ($isTestMode && !empty($testSettings['recipients'])) {
+                        $this->sendTestBounceNotification($testSettings['recipients'], $emailAddress, $subject, $originalTo, $ccAddresses);
+                    }
                     
                     // Mark as processed
                     $processed++;
@@ -176,6 +242,19 @@ class BounceProcessor {
         } catch (Exception $e) {
             error_log("Bounce processing error: " . $e->getMessage());
             return ['processed' => 0, 'error' => $e->getMessage()];
+        }
+    }
+
+    private function sendTestBounceNotification($recipients, $emailAddress, $subject, $originalTo, $ccAddresses) {
+        // In a real implementation, this would send actual emails
+        // For now we'll just log it
+        error_log("TEST MODE: Would send bounce notification to: " . $recipients);
+        error_log("Bounce details - Email: $emailAddress, Subject: $subject");
+        if (!empty($originalTo)) {
+            error_log("Original To: $originalTo");
+        }
+        if (!empty($ccAddresses)) {
+            error_log("CC Addresses: " . implode(', ', $ccAddresses));
         }
     }
 
