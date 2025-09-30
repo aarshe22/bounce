@@ -1,4 +1,4 @@
-\<?php
+<?php
 // config.php - Configuration file
 return [
     'db_path' => __DIR__ . '/database.sqlite',
