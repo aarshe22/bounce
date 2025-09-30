@@ -11,7 +11,7 @@ class BounceProcessor {
     public function __construct($config) {
         $this->config = $config;
         $this->db = new PDO("sqlite:" . $this->config['db_path']);
-.        $this->db->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+        $this->db->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
         $this->db->exec('PRAGMA busy_timeout = 5000');
         $this->createDatabaseTables();
     }
