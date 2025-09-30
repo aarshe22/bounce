@@ -1,9 +1,8 @@
 <?php
 // index.php - Main web interface
-session_start();
 require_once 'bounce.php';
 
-// Lightweight JSON endpoint for live activity logs
+// Lightweight JSON endpoint for live activity logs (no session lock)
 if (isset($_GET['fetch_activity'])) {
     header('Content-Type: application/json');
     $sinceId = isset($_GET['since']) ? (int)$_GET['since'] : 0;
@@ -29,6 +28,9 @@ if (isset($_GET['fetch_activity'])) {
     }
     exit;
 }
+
+// Start session only for full page and POST actions
+session_start();
 
 // Flash helpers
 function flash($key) {
