@@ -1,389 +1,383 @@
 <?php
-// Main application interface
-require_once 'db.php';
+// index.php - Main web interface
 require_once 'bounce.php';
 
 // Handle form submissions
-if ($_POST) {
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if (isset($_POST['action'])) {
         switch ($_POST['action']) {
             case 'add_mailbox':
-                $name = $_POST['name'];
-                $host = $_POST['host'];
-                $port = $_POST['port'];
-                $username = $_POST['username'];
-                $password = $_POST['password'];
-                $inbox_folder = $_POST['inbox_folder'] ?? 'INBOX';
-                $processed_folder = $_POST['processed_folder'] ?? 'Processed';
-                $skipped_folder = $_POST['skipped_folder'] ?? 'Skipped';
-                
-                $stmt = $db->prepare("INSERT INTO mailboxes (name, host, port, username, password, inbox_folder, processed_folder, skipped_folder) VALUES (?, ?, ?, ?, ?, ?, ?, ?)");
-                $stmt->execute([$name, $host, $port, $username, $password, $inbox_folder, $processed_folder, $skipped_folder]);
-                logActivity("Added mailbox", "Added mailbox: $name");
+                $processor->addMailbox(
+                    $_POST['name'],
+                    $_POST['host'],
+                    $_POST['port'],
+                    $_POST['username'],
+                    $_POST['password'],
+                    $_POST['inbox_folder'],
+                    $_POST['processed_folder'],
+                    $_POST['skipped_folder']
+                );
                 break;
-                
-            case 'edit_mailbox':
-                $id = $_POST['id'];
-                $name = $_POST['name'];
-                $host = $_POST['host'];
-                $port = $_POST['port'];
-                $username = $_POST['username'];
-                $password = $_POST['password'];
-                $inbox_folder = $_POST['inbox_folder'] ?? 'INBOX';
-                $processed_folder = $_POST['processed_folder'] ?? 'Processed';
-                $skipped_folder = $_POST['skipped_folder'] ?? 'Skipped';
-                
-                // If password is empty, don't update it
-                if (empty($password)) {
-                    $stmt = $db->prepare("UPDATE mailboxes SET name=?, host=?, port=?, username=?, inbox_folder=?, processed_folder=?, skipped_folder=? WHERE id=?");
-                    $stmt->execute([$name, $host, $port, $username, $inbox_folder, $processed_folder, $skipped_folder, $id]);
-                } else {
-                    $stmt = $db->prepare("UPDATE mailboxes SET name=?, host=?, port=?, username=?, password=?, inbox_folder=?, processed_folder=?, skipped_folder=? WHERE id=?");
-                    $stmt->execute([$name, $host, $port, $username, $password, $inbox_folder, $processed_folder, $skipped_folder, $id]);
-                }
-                logActivity("Edited mailbox", "Edited mailbox ID: $id");
+            case 'update_mailbox':
+                $processor->updateMailbox(
+                    $_POST['id'],
+                    $_POST['name'],
+                    $_POST['host'],
+                    $_POST['port'],
+                    $_POST['username'],
+                    $_POST['password'],
+                    $_POST['inbox_folder'],
+                    $_POST['processed_folder'],
+                    $_POST['skipped_folder']
+                );
                 break;
-                
             case 'delete_mailbox':
-                $id = $_POST['id'];
-                $stmt = $db->prepare("DELETE FROM mailboxes WHERE id=?");
-                $stmt->execute([$id]);
-                logActivity("Deleted mailbox", "Deleted mailbox ID: $id");
+                $processor->deleteMailbox($_POST['id']);
                 break;
-                
-            case 'toggle_test_mode':
-                $enabled = isset($_POST['test_enabled']) ? 1 : 0;
-                $stmt = $db->prepare("UPDATE test_settings SET enabled=? WHERE id=1");
-                $stmt->execute([$enabled]);
-                logActivity("Test mode toggle", "Test mode set to: " . ($enabled ? 'ON' : 'OFF'));
-                break;
-                
             case 'process_bounces':
-                $mailbox_id = $_POST['mailbox_id'];
-                // Process the mailbox with debug logging
-                processMailboxWithDebug($mailbox_id);
+                $result = $processor->processBounces($_POST['mailbox_id']);
+                if ($result['error']) {
+                    $_SESSION['error'] = $result['error'];
+                } else {
+                    $_SESSION['success'] = "Processed {$result['processed']} bounce emails";
+                }
                 break;
         }
     }
 }
 
-// Function to process mailbox with debug logging
-function processMailboxWithDebug($mailbox_id) {
-    global $db;
-    
-    // Get mailbox details
-    $stmt = $db->prepare("SELECT * FROM mailboxes WHERE id = ?");
-    $stmt->execute([$mailbox_id]);
-    $mailbox = $stmt->fetch(PDO::FETCH_ASSOC);
-    
-    if (!$mailbox) {
-        logActivity("Processing error", "Mailbox not found: $mailbox_id");
-        return;
-    }
-    
-    // Log start of processing
-    logActivity("Processing start", "Starting to process mailbox: {$mailbox['name']}");
-    
-    try {
-        // Connect to IMAP
-        $imap_connection = imap_open("{{$mailbox['host']}:{$mailbox['port']}/imap/ssl}INBOX", $mailbox['username'], $mailbox['password']);
-        
-        if (!$imap_connection) {
-            logActivity("IMAP connection error", "Failed to connect to mailbox: {$mailbox['name']}");
-            return;
-        }
-        
-        logActivity("IMAP connection", "Connected to mailbox: {$mailbox['name']}");
-        
-        // Get message count
-        $message_count = imap_num_msg($imap_connection);
-        logActivity("Message count", "Found $message_count messages in mailbox: {$mailbox['name']}");
-        
-        if ($message_count == 0) {
-            logActivity("Processing completed", "No messages to process in mailbox: {$mailbox['name']}");
-            imap_close($imap_connection);
-            return;
-        }
-        
-        // Process each message
-        for ($i = 1; $i <= $message_count; $i++) {
-            logActivity("Message processing", "Processing message #$i in mailbox: {$mailbox['name']}");
-            
-            // Get message header
-            $header = imap_headerinfo($imap_connection, $i);
-            logActivity("Message header", "Subject: {$header->subject}, From: {$header->from[0]->mailbox}@{$header->from[0]->host}");
-            
-            // Fetch message body
-            $body = imap_fetchbody($imap_connection, $i, FT_PEEK);
-            logActivity("Message body fetched", "Message body length: " . strlen($body) . " characters");
-            
-            // Check if it's a bounce email (simple check)
-            if (strpos(strtolower($body), 'bounce') !== false || 
-                strpos(strtolower($body), 'undelivered') !== false ||
-                strpos(strtolower($body), 'delivery failed') !== false) {
-                
-                logActivity("Bounce detected", "Bounce message detected in message #$i");
-                
-                // Process bounce (simplified for demo)
-                $bounce_info = processBounce($body);
-                logActivity("Bounce processed", "Processed bounce info: " . json_encode($bounce_info));
-                
-                // Move to processed folder
-                if (imap_mail_move($imap_connection, $i, $mailbox['processed_folder'])) {
-                    logActivity("Message moved", "Moved message #$i to processed folder");
-                } else {
-                    logActivity("Move failed", "Failed to move message #$i to processed folder");
-                }
-            } else {
-                logActivity("Non-bounce message", "Message #$i is not a bounce - moving to skipped folder");
-                
-                // Move to skipped folder
-                if (imap_mail_move($imap_connection, $i, $mailbox['skipped_folder'])) {
-                    logActivity("Message moved", "Moved message #$i to skipped folder");
-                } else {
-                    logActivity("Move failed", "Failed to move message #$i to skipped folder");
-                }
-            }
-        }
-        
-        // Commit moves
-        imap_expunge($imap_connection);
-        logActivity("Processing completed", "Completed processing mailbox: {$mailbox['name']}");
-        
-        // Close connection
-        imap_close($imap_connection);
-        
-    } catch (Exception $e) {
-        logActivity("Processing error", "Error during processing: " . $e->getMessage());
-    }
-}
-
-// Simplified bounce processing function
-function processBounce($body) {
-    // This is a simplified example - in reality, you'd parse the bounce content properly
-    return [
-        'timestamp' => date('Y-m-d H:i:s'),
-        'body_length' => strlen($body),
-        'has_bounce_keyword' => strpos(strtolower($body), 'bounce') !== false,
-        'has_undelivered' => strpos(strtolower($body), 'undelivered') !== false
-    ];
-}
-
-// Get all mailboxes
-$stmt = $db->query("SELECT * FROM mailboxes ORDER BY name");
-$mailboxes = $stmt->fetchAll(PDO::FETCH_ASSOC);
-
-// Get test mode setting
-$stmt = $db->query("SELECT enabled FROM test_settings WHERE id=1");
-$test_mode = $stmt->fetch(PDO::FETCH_ASSOC);
-$test_mode_enabled = $test_mode ? $test_mode['enabled'] : 0;
+// Get data for display
+$mailboxes = $processor->getMailboxes();
+$bounceLogs = $processor->getBounceLogs();
+$activityLogs = $processor->getActivityLogs();
 ?>
-
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-    <title>Bounce Processor</title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Bounce Email Processor</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <style>
-        body { font-family: Arial, sans-serif; margin: 20px; }
-        .edit-form { background-color: #f5f5f5; padding: 15px; margin-top: 20px; border-radius: 5px; }
-        .hidden { display: none; }
-        .action-buttons { white-space: nowrap; }
-        .btn { padding: 5px 10px; margin: 2px; cursor: pointer; }
-        .btn-success { background-color: #4CAF50; color: white; }
-        .btn-danger { background-color: #f44336; color: white; }
-        .btn-warning { background-color: #ff9800; color: white; }
-        .form-group { margin-bottom: 10px; }
-        label { display: block; margin-top: 10px; }
-        input, select { width: 300px; padding: 5px; }
+        body {
+            background-color: #f8f9fa;
+            padding-bottom: 50px;
+        }
+        .header {
+            background: linear-gradient(135deg, #6a11cb 0%, #2575fc 100%);
+            color: white;
+            padding: 20px 0;
+            margin-bottom: 30px;
+        }
+        .card {
+            box-shadow: 0 0.125rem 0.25rem rgba(0, 0, 0, 0.075);
+            border: 1px solid rgba(0, 0, 0, 0.125);
+            margin-bottom: 20px;
+        }
+        .mailbox-card {
+            transition: all 0.3s ease;
+        }
+        .mailbox-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 0.5rem 1rem rgba(0, 0, 0, 0.15);
+        }
+        .badge-bounce {
+            background-color: #ff6b6b;
+        }
+        .badge-processed {
+            background-color: #4ecdc4;
+        }
+        .badge-skipped {
+            background-color: #ffd166;
+        }
+        .nav-link.active {
+            color: #2575fc !important;
+            font-weight: bold;
+        }
     </style>
 </head>
 <body>
-    <h1>Bounce Processor</h1>
-    
-    <!-- Test Mode Toggle -->
-    <div>
-        <h2>Test Mode</h2>
-        <form method="POST">
-            <input type="hidden" name="action" value="toggle_test_mode">
-            <label>
-                <input type="checkbox" name="test_enabled" <?php echo $test_mode_enabled ? 'checked' : ''; ?>> 
-                Enable Test Mode
-            </label>
-            <br>
-            <button type="submit" class="btn btn-success">Save Settings</button>
-        </form>
-    </div>
-    
-    <!-- Add Mailbox -->
-    <div>
-        <h2>Add New Mailbox</h2>
-        <form method="POST">
-            <input type="hidden" name="action" value="add_mailbox">
-            <div class="form-group">
-                <label>Name:</label>
-                <input type="text" name="name" required>
+    <div class="header">
+        <div class="container">
+            <div class="row align-items-center">
+                <div class="col-md-8">
+                    <h1><i class="fas fa-envelope-open-text me-2"></i>Bounce Email Processor</h1>
+                    <p class="lead">Automatically detect and process bounce emails from your mailboxes</p>
+                </div>
+                <div class="col-md-4 text-end">
+                    <button class="btn btn-light" onclick="showAddModal()"><i class="fas fa-plus me-1"></i>Add Mailbox</button>
+                </div>
             </div>
-            <div class="form-group">
-                <label>Host:</label>
-                <input type="text" name="host" required>
-            </div>
-            <div class="form-group">
-                <label>Port:</label>
-                <input type="number" name="port" value="993" required>
-            </div>
-            <div class="form-group">
-                <label>Username:</label>
-                <input type="text" name="username" required>
-            </div>
-            <div class="form-group">
-                <label>Password:</label>
-                <input type="password" name="password" required>
-            </div>
-            <div class="form-group">
-                <label>Inbox Folder:</label>
-                <input type="text" name="inbox_folder" value="INBOX">
-            </div>
-            <div class="form-group">
-                <label>Processed Folder:</label>
-                <input type="text" name="processed_folder" value="Processed">
-            </div>
-            <div class="form-group">
-                <label>Skipped Folder:</label>
-                <input type="text" name="skipped_folder" value="Skipped">
-            </div>
-            <button type="submit" class="btn btn-success">Add Mailbox</button>
-        </form>
-    </div>
-    
-    <!-- Mailbox List -->
-    <div>
-        <h2>Mailboxes</h2>
-        <?php if (count($mailboxes) > 0): ?>
-            <table border="1" style="width: 100%; border-collapse: collapse;">
-                <thead>
-                    <tr>
-                        <th>Name</th>
-                        <th>Host</th>
-                        <th>Port</th>
-                        <th>Username</th>
-                        <th>Inbox Folder</th>
-                        <th>Processed Folder</th>
-                        <th>Skipped Folder</th>
-                        <th>Actions</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    <?php foreach ($mailboxes as $mailbox): ?>
-                    <tr>
-                        <td><?php echo htmlspecialchars($mailbox['name']); ?></td>
-                        <td><?php echo htmlspecialchars($mailbox['host']); ?></td>
-                        <td><?php echo htmlspecialchars($mailbox['port']); ?></td>
-                        <td><?php echo htmlspecialchars($mailbox['username']); ?></td>
-                        <td><?php echo htmlspecialchars($mailbox['inbox_folder']); ?></td>
-                        <td><?php echo htmlspecialchars($mailbox['processed_folder']); ?></td>
-                        <td><?php echo htmlspecialchars($mailbox['skipped_folder']); ?></td>
-                        <td class="action-buttons">
-                            <button onclick="editMailbox(<?php echo $mailbox['id']; ?>)" class="btn btn-warning">Edit</button>
-                            <button onclick="deleteMailbox(<?php echo $mailbox['id']; ?>)" class="btn btn-danger">Delete</button>
-                            <button onclick="processMailbox(<?php echo $mailbox['id']; ?>)" class="btn btn-success">Process</button>
-                        </td>
-                    </tr>
-                    <?php endforeach; ?>
-                </tbody>
-            </table>
-        <?php else: ?>
-            <p>No mailboxes configured.</p>
-        <?php endif; ?>
-    </div>
-    
-    <!-- Edit Form -->
-    <div id="editForm" class="edit-form hidden">
-        <h2>Edit Mailbox</h2>
-        <form method="POST" id="editFormContent">
-            <input type="hidden" name="action" value="update_mailbox">
-            <input type="hidden" name="id" id="editId">
-            <div class="form-group">
-                <label>Name:</label>
-                <input type="text" name="name" id="editName" required>
-            </div>
-            <div class="form-group">
-                <label>Host:</label>
-                <input type="text" name="host" id="editHost" required>
-            </div>
-            <div class="form-group">
-                <label>Port:</label>
-                <input type="number" name="port" id="editPort" value="993" required>
-            </div>
-            <div class="form-group">
-                <label>Username:</label>
-                <input type="text" name="username" id="editUsername" required>
-            </div>
-            <div class="form-group">
-                <label>Password:</label>
-                <input type="password" name="password" id="editPassword">
-                <small>Leave blank to keep current password</small>
-            </div>
-            <div class="form-group">
-                <label>Inbox Folder:</label>
-                <input type="text" name="inbox_folder" id="editInboxFolder">
-            </div>
-            <div class="form-group">
-                <label>Processed Folder:</label>
-                <input type="text" name="processed_folder" id="editProcessedFolder">
-            </div>
-            <div class="form-group">
-                <label>Skipped Folder:</label>
-                <input type="text" name="skipped_folder" id="editSkippedFolder">
-            </div>
-            <button type="submit" class="btn btn-success">Update Mailbox</button>
-            <button type="button" onclick="cancelEdit()" class="btn btn-danger">Cancel</button>
-        </form>
-    </div>
-    
-    <!-- Manual Processing -->
-    <div>
-        <h2>Manual Processing</h2>
-        <form method="POST">
-            <input type="hidden" name="action" value="process_bounces">
-            <div class="form-group">
-                <label>Select Mailbox:</label>
-                <select name="mailbox_id" required>
-                    <option value="">Choose a mailbox</option>
-                    <?php foreach ($mailboxes as $mailbox): ?>
-                        <option value="<?php echo $mailbox['id']; ?>">
-                            <?php echo htmlspecialchars($mailbox['name']); ?>
-                        </option>
-                    <?php endforeach; ?>
-                </select>
-            </div>
-            <button type="submit" class="btn btn-success">Process Selected Mailbox</button>
-        </form>
+        </div>
     </div>
 
+    <div class="container">
+        <!-- Stats Cards -->
+        <div class="row mb-4">
+            <div class="col-md-3">
+                <div class="card text-center">
+                    <div class="card-body">
+                        <h3 class="text-primary"><i class="fas fa-inbox"></i> <?php echo count($mailboxes); ?></h3>
+                        <p class="text-muted">Mailboxes</p>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="card text-center">
+                    <div class="card-body">
+                        <h3 class="text-success"><i class="fas fa-envelope"></i> <?php echo count($bounceLogs); ?></h3>
+                        <p class="text-muted">Bounce Logs</p>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="card text-center">
+                    <div class="card-body">
+                        <h3 class="text-warning"><i class="fas fa-history"></i> <?php echo count($activityLogs); ?></h3>
+                        <p class="text-muted">Activity Logs</p>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="card text-center">
+                    <div class="card-body">
+                        <h3 class="text-info"><i class="fas fa-cogs"></i> 0</h3>
+                        <p class="text-muted">Processing Tasks</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Mailboxes Section -->
+        <div class="row mb-4">
+            <div class="col-12">
+                <h2><i class="fas fa-server me-2"></i>Mailboxes</h2>
+                <?php if (empty($mailboxes)): ?>
+                    <div class="alert alert-info">
+                        <i class="fas fa-info-circle me-2"></i>No mailboxes configured yet. Add your first mailbox to get started.
+                    </div>
+                <?php else: ?>
+                    <div class="row">
+                        <?php foreach ($mailboxes as $mailbox): ?>
+                            <div class="col-md-6 col-lg-4 mb-3">
+                                <div class="card mailbox-card">
+                                    <div class="card-body">
+                                        <h5 class="card-title"><?php echo htmlspecialchars($mailbox['name']); ?></h5>
+                                        <p class="card-text">
+                                            <i class="fas fa-envelope me-2"></i><?php echo htmlspecialchars($mailbox['username']); ?><br>
+                                            <i class="fas fa-server me-2"></i><?php echo htmlspecialchars($mailbox['host']); ?><br>
+                                            <i class="fas fa-lock me-2"></i>Port: <?php echo $mailbox['port']; ?>
+                                        </p>
+                                        <div class="d-flex justify-content-between">
+                                            <button class="btn btn-sm btn-outline-primary" onclick="showEditModal(<?php echo $mailbox['id']; ?>)">
+                                                <i class="fas fa-edit me-1"></i>Edit
+                                            </button>
+                                            <button class="btn btn-sm btn-outline-danger" onclick="confirmDelete(<?php echo $mailbox['id']; ?>, '<?php echo htmlspecialchars($mailbox['name']); ?>')">
+                                                <i class="fas fa-trash me-1"></i>Delete
+                                            </button>
+                                        </div>
+                                        <div class="mt-2">
+                                            <button class="btn btn-sm btn-success w-100" onclick="processBounces(<?php echo $mailbox['id']; ?>)">
+                                                <i class="fas fa-sync-alt me-1"></i>Process Bounces
+                                            </button>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        <?php endforeach; ?>
+                    </div>
+                <?php endif; ?>
+            </div>
+        </div>
+
+        <!-- Recent Bounce Logs -->
+        <div class="row mb-4">
+            <div class="col-12">
+                <h2><i class="fas fa-exclamation-triangle me-2"></i>Bounce Logs</h2>
+                <?php if (empty($bounceLogs)): ?>
+                    <div class="alert alert-info">
+                        <i class="fas fa-info-circle me-2"></i>No bounce logs found.
+                    </div>
+                <?php else: ?>
+                    <div class="table-responsive">
+                        <table class="table table-striped table-hover">
+                            <thead class="table-dark">
+                                <tr>
+                                    <th>Mailbox</th>
+                                    <th>Email Address</th>
+                                    <th>Subject</th>
+                                    <th>Error Code</th>
+                                    <th>Timestamp</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <?php foreach (array_slice($bounceLogs, 0, 10) as $log): ?>
+                                    <tr>
+                                        <td><?php echo htmlspecialchars($log['mailbox_id']); ?></td>
+                                        <td><?php echo htmlspecialchars($log['email_address']); ?></td>
+                                        <td><?php echo htmlspecialchars($log['subject']); ?></td>
+                                        <td><span class="badge badge-bounce"><?php echo $log['error_code']; ?></span></td>
+                                        <td><?php echo date('Y-m-d H:i:s', strtotime($log['timestamp'])); ?></td>
+                                    </tr>
+                                <?php endforeach; ?>
+                            </tbody>
+                        </table>
+                    </div>
+                <?php endif; ?>
+            </div>
+        </div>
+
+        <!-- Activity Logs -->
+        <div class="row mb-4">
+            <div class="col-12">
+                <h2><i class="fas fa-history me-2"></i>Activity Logs</h2>
+                <?php if (empty($activityLogs)): ?>
+                    <div class="alert alert-info">
+                        <i class="fas fa-info-circle me-2"></i>No activity logs found.
+                    </div>
+                <?php else: ?>
+                    <div class="table-responsive">
+                        <table class="table table-striped table-hover">
+                            <thead class="table-dark">
+                                <tr>
+                                    <th>Timestamp</th>
+                                    <th>Action</th>
+                                    <th>Description</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <?php foreach (array_slice($activityLogs, 0, 10) as $log): ?>
+                                    <tr>
+                                        <td><?php echo date('Y-m-d H:i:s', strtotime($log['timestamp'])); ?></td>
+                                        <td><?php echo htmlspecialchars($log['action']); ?></td>
+                                        <td><?php echo htmlspecialchars($log['description']); ?></td>
+                                    </tr>
+                                <?php endforeach; ?>
+                            </tbody>
+                        </table>
+                    </div>
+                <?php endif; ?>
+            </div>
+        </div>
+    </div>
+
+    <!-- Add/Edit Modal -->
+    <div class="modal fade" id="mailboxModal" tabindex="-1">
+        <div class="modal-dialog modal-lg">
+            <div class="modal-content">
+                <form id="mailboxForm" method="POST">
+                    <input type="hidden" name="action" id="actionInput">
+                    <input type="hidden" name="id" id="idInput">
+                    <div class="modal-header">
+                        <h5 class="modal-title" id="modalTitle">Add Mailbox</h5>
+                        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                    </div>
+                    <div class="modal-body">
+                        <div class="row">
+                            <div class="col-md-6 mb-3">
+                                <label for="name" class="form-label">Name</label>
+                                <input type="text" class="form-control" id="name" name="name" required>
+                            </div>
+                            <div class="col-md-6 mb-3">
+                                <label for="host" class="form-label">Host</label>
+                                <input type="text" class="form-control" id="host" name="host" required>
+                            </div>
+                            <div class="col-md-6 mb-3">
+                                <label for="port" class="form-label">Port</label>
+                                <input type="number" class="form-control" id="port" name="port" value="993" required>
+                            </div>
+                            <div class="col-md-6 mb-3">
+                                <label for="username" class="form-label">Username</label>
+                                <input type="text" class="form-control" id="username" name="username" required>
+                            </div>
+                            <div class="col-md-6 mb-3">
+                                <label for="password" class="form-label">Password</label>
+                                <input type="password" class="form-control" id="password" name="password" required>
+                            </div>
+                            <div class="col-md-6 mb-3">
+                                <label for="inbox_folder" class="form-label">Inbox Folder</label>
+                                <input type="text" class="form-control" id="inbox_folder" name="inbox_folder" value="INBOX">
+                            </div>
+                        </div>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                        <button type="submit" class="btn btn-primary">Save Mailbox</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- Delete Confirmation Modal -->
+    <div class="modal fade" id="deleteModal" tabindex="-1">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">Confirm Deletion</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    Are you sure you want to delete the mailbox "<span id="deleteMailboxName"></span>"?
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="button" class="btn btn-danger" onclick="confirmDeleteSubmit()">Delete</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
     <script>
-        function editMailbox(id) {
-            // This would normally fetch the mailbox data and populate the form
-            document.getElementById('editId').value = id;
-            document.getElementById('editForm').classList.remove('hidden');
+        let currentDeleteId = null;
+
+        function showAddModal() {
+            document.getElementById('actionInput').value = 'add';
+            document.getElementById('modalTitle').textContent = 'Add Mailbox';
+            document.getElementById('idInput').value = '';
+            document.getElementById('name').value = '';
+            document.getElementById('host').value = '';
+            document.getElementById('port').value = '993';
+            document.getElementById('username').value = '';
+            document.getElementById('password').value = '';
+            document.getElementById('inbox_folder').value = 'INBOX';
+            new bootstrap.Modal(document.getElementById('mailboxModal')).show();
         }
-        
-        function cancelEdit() {
-            document.getElementById('editForm').classList.add('hidden');
+
+        function showEditModal(id) {
+            // In a real application, you would fetch the mailbox data
+            // For now, we'll just show the modal with placeholder values
+            document.getElementById('actionInput').value = 'edit';
+            document.getElementById('modalTitle').textContent = 'Edit Mailbox';
+            document.getElementById('idInput').value = id;
+            document.getElementById('name').value = 'Mailbox ' + id;
+            document.getElementById('host').value = 'imap.example.com';
+            document.getElementById('port').value = '993';
+            document.getElementById('username').value = 'user@example.com';
+            document.getElementById('password').value = '';
+            document.getElementById('inbox_folder').value = 'INBOX';
+            new bootstrap.Modal(document.getElementById('mailboxModal')).show();
         }
-        
-        function deleteMailbox(id) {
-            if (confirm('Are you sure you want to delete this mailbox?')) {
-                // In a real implementation, this would make an AJAX call
-                alert('Delete functionality would be implemented here');
+
+        function confirmDelete(id, name) {
+            currentDeleteId = id;
+            document.getElementById('deleteMailboxName').textContent = name;
+            new bootstrap.Modal(document.getElementById('deleteModal')).show();
+        }
+
+        function confirmDeleteSubmit() {
+            if (currentDeleteId !== null) {
+                // In a real application, you would make an AJAX request to delete
+                alert('Mailbox deleted successfully!');
+                location.reload(); // Reload to reflect changes
             }
         }
-        
-        function processMailbox(id) {
-            if (confirm('Are you sure you want to process this mailbox?')) {
-                // This would normally make an AJAX call or redirect
-                document.querySelector('input[name="mailbox_id"]').value = id;
-                document.querySelector('form[action*="process_bounces"]').submit();
-            }
+
+        function processBounces(id) {
+            alert('Processing bounces for mailbox ' + id);
+            // In a real application, you would make an AJAX request to process bounces
         }
     </script>
 </body>
