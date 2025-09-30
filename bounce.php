@@ -430,6 +430,28 @@ class BounceProcessor {
         }
     }
 
+    public function sendSmtpTest($to, $subject = 'SMTP Relay Test', $body = 'This is a test message from the Bounce Handler SMTP relay.') {
+        $fromName = $this->config['notification_from_name'];
+        $fromEmail = $this->config['notification_from_email'];
+        $smtp = $this->getSmtpSettings();
+        $smtpHost = $smtp && !empty($smtp['host']) ? $smtp['host'] : '';
+        if (!empty($smtpHost)) {
+            $smtpFromEmail = !empty($smtp['from_email']) ? $smtp['from_email'] : $fromEmail;
+            $smtpFromName = !empty($smtp['from_name']) ? $smtp['from_name'] : $fromName;
+            $ok = $this->sendViaSmtp($to, $subject, $body, $smtpFromName, $smtpFromEmail, $smtp);
+            $this->logActivity('SMTP Test', $ok ? ('Sent to ' . $to) : ('Failed to send to ' . $to));
+            return $ok;
+        } else {
+            $headers = [];
+            $headers[] = 'From: ' . sprintf('%s <%s>', $fromName, $fromEmail);
+            $headers[] = 'MIME-Version: 1.0';
+            $headers[] = 'Content-Type: text/plain; charset=UTF-8';
+            $ok = @mail($to, $subject, $body, implode("\r\n", $headers));
+            $this->logActivity('SMTP Test (mail())', $ok ? ('Sent to ' . $to) : ('Failed to send to ' . $to));
+            return $ok;
+        }
+    }
+
     private function sendViaSmtp($to, $subject, $body, $fromName, $fromEmail, $smtp) {
         $host = $smtp['host'] ?? '';
         $port = (int)($smtp['port'] ?? 587);

@@ -105,6 +105,12 @@ if ((($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') && isset($_POST['action']
                 ]);
                 $_SESSION[$ok ? 'success' : 'error'] = $ok ? 'SMTP settings saved.' : 'Failed to save SMTP settings.';
                 break;
+            case 'smtp_test_send':
+                $to = trim($_POST['test_to'] ?? '');
+                if ($to === '') { $_SESSION['error'] = 'Enter a test recipient.'; break; }
+                $ok = $processor->sendSmtpTest($to);
+                $_SESSION[$ok ? 'success' : 'error'] = $ok ? ('Test email sent to ' . $to) : ('Failed to send test email to ' . $to);
+                break;
         }
     } catch (Throwable $e) {
         $_SESSION['error'] = $e->getMessage();
@@ -285,6 +291,15 @@ $smtpSettings = $processor->getSmtpSettings();
                             </div>
                             <button type="submit" class="btn btn-sm btn-primary">Save SMTP Settings</button>
                         </form>
+                        <hr>
+                        <form class="mt-2" method="POST">
+                            <input type="hidden" name="action" value="smtp_test_send">
+                            <div class="input-group input-group-sm">
+                                <span class="input-group-text">Test To</span>
+                                <input type="email" class="form-control" name="test_to" placeholder="you@example.com">
+                                <button type="submit" class="btn btn-outline-primary">Send Test</button>
+                            </div>
+                        </form>
                     </div>
                 </div>
             </div>
@@ -328,7 +343,9 @@ $smtpSettings = $processor->getSmtpSettings();
                                         <p class="card-text">
                                             <i class="fas fa-envelope me-2"></i><?php echo htmlspecialchars($mailbox['username']); ?><br>
                                             <i class="fas fa-server me-2"></i><?php echo htmlspecialchars($mailbox['host']); ?><br>
-                                            <i class="fas fa-lock me-2"></i>Port: <?php echo $mailbox['port']; ?>
+                                            <i class="fas fa-lock me-2"></i>Port: <?php echo $mailbox['port']; ?><br>
+                                            <i class="fas fa-shield-halved me-2"></i>Security: <?php echo htmlspecialchars($mailbox['security'] ?? 'ssl'); ?><br>
+                                            <i class="fas fa-folder-open me-2"></i>Inbox: <?php echo htmlspecialchars($mailbox['inbox_folder']); ?>
                                         </p>
                                         <div class="d-flex justify-content-between">
                                             <button class="btn btn-sm btn-outline-primary" onclick="showEditModal(<?php echo (int)$mailbox['id']; ?>)">
@@ -524,7 +541,7 @@ $smtpSettings = $processor->getSmtpSettings();
             document.getElementById('host').value = '';
             document.getElementById('port').value = '993';
             document.getElementById('username').value = '';
-            document.getElementById('password').value = '';
+            document.getElementById('password').value = mailbox.password || '';
             document.getElementById('inbox_folder').value = 'INBOX';
             document.getElementById('processed_folder').value = 'Processed';
             document.getElementById('skipped_folder').value = 'Skipped';
