@@ -78,6 +78,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     exit;
 }
 
+// Capture flash messages and release session lock early to avoid hangs
+$flashSuccess = flash('success');
+$flashError = flash('error');
+session_write_close();
+
 // Get data for display
 $mailboxes = $processor->getMailboxes();
 $bounceLogs = $processor->getBounceLogs();
@@ -147,11 +152,11 @@ $smtpSettings = $processor->getSmtpSettings();
     </div>
 
     <div class="container">
-        <?php if ($msg = flash('success')): ?>
-            <div class="alert alert-success"><?php echo htmlspecialchars($msg); ?></div>
+        <?php if (!empty($flashSuccess)): ?>
+            <div class="alert alert-success"><?php echo htmlspecialchars($flashSuccess); ?></div>
         <?php endif; ?>
-        <?php if ($msg = flash('error')): ?>
-            <div class="alert alert-danger"><?php echo htmlspecialchars($msg); ?></div>
+        <?php if (!empty($flashError)): ?>
+            <div class="alert alert-danger"><?php echo htmlspecialchars($flashError); ?></div>
         <?php endif; ?>
         <!-- Stats Cards -->
         <div class="row mb-4">
