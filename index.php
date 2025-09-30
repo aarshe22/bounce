@@ -7,6 +7,7 @@ if (isset($_GET['fetch_activity'])) {
     header('Content-Type: application/json');
     $sinceId = isset($_GET['since']) ? (int)$_GET['since'] : 0;
     try {
+        $processor = new BounceProcessor($config, true);
         // Fetch logs newer than sinceId
         $dbLogs = $processor->getActivityLogs();
         $result = [];
@@ -31,6 +32,7 @@ if (isset($_GET['fetch_activity'])) {
 
 // Start session only for full page and POST actions
 session_start();
+$processor = new BounceProcessor($config, false);
 
 // Flash helpers
 function flash($key) {
