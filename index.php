@@ -58,6 +58,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 $ok = $processor->updateTestSettings($enabled, $recipients);
                 $_SESSION[$ok ? 'success' : 'error'] = $ok ? 'Test settings saved.' : 'Failed to save test settings.';
                 break;
+            case 'update_smtp_settings':
+                $ok = $processor->updateSmtpSettings([
+                    'host' => $_POST['host'] ?? '',
+                    'port' => $_POST['port'] ?? 587,
+                    'username' => $_POST['username'] ?? '',
+                    'password' => $_POST['password'] ?? '',
+                    'security' => $_POST['security'] ?? 'tls',
+                    'from_email' => $_POST['from_email'] ?? '',
+                    'from_name' => $_POST['from_name'] ?? ''
+                ]);
+                $_SESSION[$ok ? 'success' : 'error'] = $ok ? 'SMTP settings saved.' : 'Failed to save SMTP settings.';
+                break;
         }
     } catch (Throwable $e) {
         $_SESSION['error'] = $e->getMessage();
@@ -71,6 +83,7 @@ $mailboxes = $processor->getMailboxes();
 $bounceLogs = $processor->getBounceLogs();
 $activityLogs = $processor->getActivityLogs();
 $testSettings = $processor->getTestSettings();
+$smtpSettings = $processor->getSmtpSettings();
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -167,7 +180,7 @@ $testSettings = $processor->getTestSettings();
                 </div>
             </div>
             <div class="col-md-3">
-                <div class="card">
+                <div class="card mb-3">
                     <div class="card-body">
                         <div class="d-flex justify-content-between align-items-center">
                             <div>
@@ -187,6 +200,50 @@ $testSettings = $processor->getTestSettings();
                                 <input type="text" class="form-control" id="test_recipients" name="test_recipients" value="<?php echo htmlspecialchars($testSettings['recipients']); ?>" placeholder="user@example.com, team@example.com">
                             </div>
                             <button type="submit" class="btn btn-sm btn-primary">Save</button>
+                        </form>
+                    </div>
+                </div>
+                <div class="card">
+                    <div class="card-body">
+                        <h5 class="mb-3">SMTP Relay (optional)</h5>
+                        <form method="POST">
+                            <input type="hidden" name="action" value="update_smtp_settings">
+                            <div class="mb-2">
+                                <label class="form-label" for="smtp_host">Host</label>
+                                <input type="text" class="form-control" id="smtp_host" name="host" value="<?php echo htmlspecialchars($smtpSettings['host'] ?? ''); ?>" placeholder="smtp.example.com">
+                            </div>
+                            <div class="row">
+                                <div class="col-6 mb-2">
+                                    <label class="form-label" for="smtp_port">Port</label>
+                                    <input type="number" class="form-control" id="smtp_port" name="port" value="<?php echo htmlspecialchars($smtpSettings['port'] ?? 587); ?>">
+                                </div>
+                                <div class="col-6 mb-2">
+                                    <label class="form-label" for="smtp_security">Security</label>
+                                    <select id="smtp_security" class="form-select" name="security">
+                                        <?php $sec = strtolower($smtpSettings['security'] ?? 'tls'); ?>
+                                        <option value="none" <?php echo $sec==='none' ? 'selected' : ''; ?>>None</option>
+                                        <option value="tls" <?php echo $sec==='tls' ? 'selected' : ''; ?>>STARTTLS</option>
+                                        <option value="ssl" <?php echo $sec==='ssl' ? 'selected' : ''; ?>>SSL</option>
+                                    </select>
+                                </div>
+                            </div>
+                            <div class="mb-2">
+                                <label class="form-label" for="smtp_username">Username</label>
+                                <input type="text" class="form-control" id="smtp_username" name="username" value="<?php echo htmlspecialchars($smtpSettings['username'] ?? ''); ?>">
+                            </div>
+                            <div class="mb-2">
+                                <label class="form-label" for="smtp_password">Password</label>
+                                <input type="password" class="form-control" id="smtp_password" name="password" value="<?php echo htmlspecialchars($smtpSettings['password'] ?? ''); ?>">
+                            </div>
+                            <div class="mb-2">
+                                <label class="form-label" for="smtp_from_email">From Email (optional)</label>
+                                <input type="email" class="form-control" id="smtp_from_email" name="from_email" value="<?php echo htmlspecialchars($smtpSettings['from_email'] ?? ''); ?>">
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label" for="smtp_from_name">From Name (optional)</label>
+                                <input type="text" class="form-control" id="smtp_from_name" name="from_name" value="<?php echo htmlspecialchars($smtpSettings['from_name'] ?? ''); ?>">
+                            </div>
+                            <button type="submit" class="btn btn-sm btn-primary">Save SMTP Settings</button>
                         </form>
                     </div>
                 </div>

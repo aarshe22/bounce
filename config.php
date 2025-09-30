@@ -6,6 +6,17 @@ return [
     'default_imap_port' => 993,
     'notification_from_email' => 'bounces@localhost',
     'notification_from_name' => 'Bounce Handler',
+    // Optional SMTP relay for delivering notifications. Leave 'host' empty to use PHP mail().
+    'smtp' => [
+        'host' => '',        // e.g. 'smtp.example.com' (empty to disable)
+        'port' => 587,       // 25, 465 (ssl), or 587 (tls)
+        'username' => '',    // SMTP username
+        'password' => '',    // SMTP password
+        'security' => 'tls', // 'none' | 'tls' | 'ssl'
+        // Optional: override From for SMTP specifically (falls back to notification_from_* above)
+        'from_email' => '',
+        'from_name' => ''
+    ],
     'smtp_error_codes' => [
         '550' => 'Mailbox unavailable or user does not exist',
         '552' => 'Mailbox full or message too large',

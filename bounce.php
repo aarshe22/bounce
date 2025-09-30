@@ -55,8 +55,23 @@ class BounceProcessor {
             recipients TEXT
         )");
         
+        $this->db->exec("CREATE TABLE IF NOT EXISTS smtp_settings (
+            id INTEGER PRIMARY KEY,
+            host TEXT DEFAULT '',
+            port INTEGER DEFAULT 587,
+            username TEXT DEFAULT '',
+            password TEXT DEFAULT '',
+            security TEXT DEFAULT 'tls',
+            from_email TEXT DEFAULT '',
+            from_name TEXT DEFAULT ''
+        )");
+        
         // Initialize test settings if not exists
         $stmt = $this->db->prepare("INSERT OR IGNORE INTO test_settings (id, enabled, recipients) VALUES (1, 0, '')");
+        $stmt->execute();
+        
+        // Initialize smtp settings if not exists
+        $stmt = $this->db->prepare("INSERT OR IGNORE INTO smtp_settings (id, host, port, username, password, security, from_email, from_name) VALUES (1, '', 587, '', '', 'tls', '', '')");
         $stmt->execute();
     }
 
@@ -127,6 +142,31 @@ class BounceProcessor {
         try {
             $stmt = $this->db->prepare("UPDATE test_settings SET enabled=?, recipients=? WHERE id=1");
             $result = $stmt->execute([$enabled, $recipients]);
+            return $result;
+        } catch (Exception $e) {
+            error_log("Database error: " . $e->getMessage());
+            return false;
+        }
+    }
+
+    public function getSmtpSettings() {
+        $stmt = $this->db->query("SELECT * FROM smtp_settings WHERE id=1");
+        return $stmt->fetch(PDO::FETCH_ASSOC);
+    }
+
+    public function updateSmtpSettings($data) {
+        try {
+            $stmt = $this->db->prepare("UPDATE smtp_settings SET host=?, port=?, username=?, password=?, security=?, from_email=?, from_name=? WHERE id=1");
+            $result = $stmt->execute([
+                trim($data['host'] ?? ''),
+                (int)($data['port'] ?? 587),
+                (string)($data['username'] ?? ''),
+                (string)($data['password'] ?? ''),
+                in_array(strtolower($data['security'] ?? 'tls'), ['none','ssl','tls']) ? strtolower($data['security']) : 'tls',
+                trim($data['from_email'] ?? ''),
+                trim($data['from_name'] ?? '')
+            ]);
+            $this->logActivity('Updated SMTP Settings');
             return $result;
         } catch (Exception $e) {
             error_log("Database error: " . $e->getMessage());
@@ -307,10 +347,6 @@ class BounceProcessor {
         $to = $recipients;
         $fromName = $this->config['notification_from_name'];
         $fromEmail = $this->config['notification_from_email'];
-        $headers = [];
-        $headers[] = 'From: ' . sprintf('%s <%s>', $fromName, $fromEmail);
-        $headers[] = 'MIME-Version: 1.0';
-        $headers[] = 'Content-Type: text/plain; charset=UTF-8';
         $bodyLines = [];
         $bodyLines[] = $isTest ? '[TEST MODE] Bounce Notification' : 'Bounce Notification';
         $bodyLines[] = '';
@@ -324,7 +360,110 @@ class BounceProcessor {
             $bodyLines[] = 'Original Cc: ' . implode(', ', $ccAddresses);
         }
         $body = implode("\r\n", $bodyLines);
-        @mail($to, ($isTest ? '[TEST] ' : '') . 'Bounce Notification', $body, implode("\r\n", $headers));
+
+        $smtp = $this->getSmtpSettings();
+        $smtpHost = $smtp && !empty($smtp['host']) ? $smtp['host'] : '';
+        if (!empty($smtpHost)) {
+            $smtpFromEmail = !empty($smtp['from_email']) ? $smtp['from_email'] : $fromEmail;
+            $smtpFromName = !empty($smtp['from_name']) ? $smtp['from_name'] : $fromName;
+            $this->sendViaSmtp($to, ($isTest ? '[TEST] ' : '') . 'Bounce Notification', $body, $smtpFromName, $smtpFromEmail, $smtp);
+        } else {
+            $headers = [];
+            $headers[] = 'From: ' . sprintf('%s <%s>', $fromName, $fromEmail);
+            $headers[] = 'MIME-Version: 1.0';
+            $headers[] = 'Content-Type: text/plain; charset=UTF-8';
+            @mail($to, ($isTest ? '[TEST] ' : '') . 'Bounce Notification', $body, implode("\r\n", $headers));
+        }
+    }
+
+    private function sendViaSmtp($to, $subject, $body, $fromName, $fromEmail, $smtp) {
+        $host = $smtp['host'] ?? '';
+        $port = (int)($smtp['port'] ?? 587);
+        $username = $smtp['username'] ?? '';
+        $password = $smtp['password'] ?? '';
+        $security = strtolower($smtp['security'] ?? 'tls');
+
+        $remote = $host . ':' . $port;
+        $transport = ($security === 'ssl') ? 'ssl://' . $host : $host;
+
+        $errno = 0; $errstr = '';
+        $fp = @fsockopen($security === 'ssl' ? 'ssl://' . $host : $host, $port, $errno, $errstr, 10);
+        if (!$fp) {
+            error_log('SMTP connection failed: ' . $errstr);
+            return false;
+        }
+
+        $read = function() use ($fp) {
+            $data = '';
+            while ($str = fgets($fp, 515)) {
+                $data .= $str;
+                if (substr($str, 3, 1) === ' ') break;
+            }
+            return $data;
+        };
+        $write = function($cmd) use ($fp) {
+            fputs($fp, $cmd . "\r\n");
+        };
+
+        $read();
+        $write('EHLO localhost');
+        $ehlo = $read();
+
+        if ($security === 'tls') {
+            $write('STARTTLS');
+            $starttls = $read();
+            if (strpos($starttls, '220') !== 0) {
+                fclose($fp);
+                error_log('SMTP STARTTLS failed');
+                return false;
+            }
+            if (!stream_socket_enable_crypto($fp, true, STREAM_CRYPTO_METHOD_TLS_CLIENT)) {
+                fclose($fp);
+                error_log('SMTP TLS negotiation failed');
+                return false;
+            }
+            $write('EHLO localhost');
+            $ehlo = $read();
+        }
+
+        if (!empty($username)) {
+            $write('AUTH LOGIN');
+            $read();
+            $write(base64_encode($username));
+            $read();
+            $write(base64_encode($password));
+            $authResp = $read();
+            if (strpos($authResp, '235') !== 0) {
+                fclose($fp);
+                error_log('SMTP authentication failed');
+                return false;
+            }
+        }
+
+        $write('MAIL FROM: <' . $fromEmail . '>');
+        $read();
+        // Support multiple recipients separated by comma
+        $recipients = array_map('trim', explode(',', $to));
+        foreach ($recipients as $rcpt) {
+            if ($rcpt === '') continue;
+            $write('RCPT TO: <' . $rcpt . '>');
+            $read();
+        }
+        $write('DATA');
+        $read();
+
+        $headers = [];
+        $headers[] = 'From: ' . sprintf('%s <%s>', $fromName, $fromEmail);
+        $headers[] = 'To: ' . implode(', ', $recipients);
+        $headers[] = 'Subject: ' . $subject;
+        $headers[] = 'MIME-Version: 1.0';
+        $headers[] = 'Content-Type: text/plain; charset=UTF-8';
+        $message = implode("\r\n", $headers) . "\r\n\r\n" . $body . "\r\n.";
+        $write($message);
+        $read();
+        $write('QUIT');
+        fclose($fp);
+        return true;
     }
 
     public function getBounceLogs($mailboxId = null) {
