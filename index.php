@@ -623,10 +623,32 @@ $smtpSettings = $processor->getSmtpSettings();
             }
         });
 
+        // Auto-start live log
+        fetchLogsOnce();
+        liveLogInterval = setInterval(fetchLogsOnce, 2000);
+        document.getElementById('logToggleBtn').textContent = 'Stop Live Log';
+
         document.getElementById('logClearBtn').addEventListener('click', () => {
             document.getElementById('liveLog').textContent = '';
             lastLogId = 0;
         });
+
+        // Intercept SMTP test form submit to avoid page reload
+        (function() {
+            const form = document.querySelector('form[action][method="POST"] input[value="smtp_test_send"]')?.closest('form');
+            if (!form) return;
+            form.addEventListener('submit', async (e) => {
+                e.preventDefault();
+                const fd = new FormData(form);
+                try {
+                    const res = await fetch('', { method: 'POST', body: fd });
+                    // do not navigate; just refresh logs and flash via fetch of activity only
+                    fetchLogsOnce();
+                } catch (err) {
+                    // ignore
+                }
+            });
+        })();
     </script>
 </body>
 </html>

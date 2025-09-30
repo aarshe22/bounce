@@ -418,7 +418,7 @@ class BounceProcessor {
         $smtp = $this->getSmtpSettings();
         $smtpHost = $smtp && !empty($smtp['host']) ? $smtp['host'] : '';
         if (!empty($smtpHost)) {
-            $smtpFromEmail = !empty($smtp['from_email']) ? $smtp['from_email'] : $fromEmail;
+            $smtpFromEmail = !empty($smtp['from_email']) ? $smtp['from_email'] : (filter_var($smtp['username'] ?? '', FILTER_VALIDATE_EMAIL) ? $smtp['username'] : $fromEmail);
             $smtpFromName = !empty($smtp['from_name']) ? $smtp['from_name'] : $fromName;
             $this->sendViaSmtp($to, ($isTest ? '[TEST] ' : '') . 'Bounce Notification', $body, $smtpFromName, $smtpFromEmail, $smtp);
         } else {
@@ -436,7 +436,7 @@ class BounceProcessor {
         $smtp = $this->getSmtpSettings();
         $smtpHost = $smtp && !empty($smtp['host']) ? $smtp['host'] : '';
         if (!empty($smtpHost)) {
-            $smtpFromEmail = !empty($smtp['from_email']) ? $smtp['from_email'] : $fromEmail;
+            $smtpFromEmail = !empty($smtp['from_email']) ? $smtp['from_email'] : (filter_var($smtp['username'] ?? '', FILTER_VALIDATE_EMAIL) ? $smtp['username'] : $fromEmail);
             $smtpFromName = !empty($smtp['from_name']) ? $smtp['from_name'] : $fromName;
             $this->logActivity('SMTP Test', sprintf('Attempt host=%s port=%s security=%s from=%s to=%s',
                 $smtp['host'], $smtp['port'] ?? '', strtolower($smtp['security'] ?? ''), $smtpFromEmail, $to));
@@ -530,15 +530,30 @@ class BounceProcessor {
 
         $write('MAIL FROM: <' . $fromEmail . '>'); if ($verbose) { $this->logActivity('SMTP', 'C: MAIL FROM: <' . $fromEmail . '>'); }
         $resp = $read(); if ($verbose) { $this->logActivity('SMTP', 'S: ' . trim($resp)); }
+        if (strpos($resp, '250') !== 0 && strpos($resp, '2') !== 0) {
+            if ($verbose) { $this->logActivity('SMTP', 'MAIL FROM rejected'); }
+            fclose($fp);
+            return false;
+        }
         // Support multiple recipients separated by comma
         $recipients = array_map('trim', explode(',', $to));
         foreach ($recipients as $rcpt) {
             if ($rcpt === '') continue;
             $write('RCPT TO: <' . $rcpt . '>'); if ($verbose) { $this->logActivity('SMTP', 'C: RCPT TO: <' . $rcpt . '>'); }
             $rcptResp = $read(); if ($verbose) { $this->logActivity('SMTP', 'S: ' . trim($rcptResp)); }
+            if (strpos($rcptResp, '250') !== 0 && strpos($rcptResp, '251') !== 0 && strpos($rcptResp, '2') !== 0) {
+                if ($verbose) { $this->logActivity('SMTP', 'RCPT rejected: ' . $rcpt); }
+                fclose($fp);
+                return false;
+            }
         }
         $write('DATA'); if ($verbose) { $this->logActivity('SMTP', 'C: DATA'); }
         $dataReady = $read(); if ($verbose) { $this->logActivity('SMTP', 'S: ' . trim($dataReady)); }
+        if (strpos($dataReady, '354') !== 0) {
+            if ($verbose) { $this->logActivity('SMTP', 'DATA not accepted'); }
+            fclose($fp);
+            return false;
+        }
 
         $headers = [];
         $headers[] = 'From: ' . sprintf('%s <%s>', $fromName, $fromEmail);
@@ -552,6 +567,11 @@ class BounceProcessor {
         if ($verbose) { $this->logActivity('SMTP', 'C: [headers+body+<CRLF>.<CRLF>]'); }
         $write($message);
         $final = $read(); if ($verbose) { $this->logActivity('SMTP', 'S: ' . trim($final)); }
+        if (strpos($final, '250') !== 0) {
+            if ($verbose) { $this->logActivity('SMTP', 'Delivery not accepted'); }
+            fclose($fp);
+            return false;
+        }
         $write('QUIT'); if ($verbose) { $this->logActivity('SMTP', 'C: QUIT'); }
         fclose($fp);
         return true;
