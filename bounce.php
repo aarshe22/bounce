@@ -1,6 +1,7 @@
 <?php
 // bounce.php - Core processing logic
 require_once 'config.php';
+require_once 'imap.php';
 $config = require 'config.php';
 
 class BounceProcessor {
@@ -75,9 +76,8 @@ class BounceProcessor {
 
     public function addMailbox($name, $host, $port, $username, $password, $inbox_folder = 'INBOX', $processed_folder = 'Processed', $skipped_folder = 'Skipped') {
         try {
-            $hashedPassword = password_hash($password, PASSWORD_DEFAULT);
             $stmt = $this->db->prepare("INSERT INTO mailboxes (name, host, port, username, password, inbox_folder, processed_folder, skipped_folder) VALUES (?, ?, ?, ?, ?, ?, ?, ?)");
-            $result = $stmt->execute([$name, $host, $port, $username, $hashedPassword, $inbox_folder, $processed_folder, $skipped_folder]);
+            $result = $stmt->execute([$name, $host, $port, $username, $password, $inbox_folder, $processed_folder, $skipped_folder]);
             $this->logActivity("Added Mailbox", "Name: $name");
             return $result;
         } catch (Exception $e) {
@@ -90,9 +90,8 @@ class BounceProcessor {
         try {
             // Check if password is provided
             if (!empty($password)) {
-                $hashedPassword = password_hash($password, PASSWORD_DEFAULT);
                 $stmt = $this->db->prepare("UPDATE mailboxes SET name=?, host=?, port=?, username=?, password=?, inbox_folder=?, processed_folder=?, skipped_folder=? WHERE id=?");
-                $result = $stmt->execute([$name, $host, $port, $username, $hashedPassword, $inbox_folder, $processed_folder, $skipped_folder, $id]);
+                $result = $stmt->execute([$name, $host, $port, $username, $password, $inbox_folder, $processed_folder, $skipped_folder, $id]);
             } else {
                 // Keep existing password
                 $stmt = $this->db->prepare("UPDATE mailboxes SET name=?, host=?, port=?, username=?, inbox_folder=?, processed_folder=?, skipped_folder=? WHERE id=?");
@@ -151,7 +150,7 @@ class BounceProcessor {
             $isTestMode = (bool)$testSettings['enabled'];
             
             // Connect to IMAP
-            $imapPath = "{" . $mailbox['host'] . ":" . $mailbox['port'] . "/imap/ssl}INBOX";
+            $imapPath = "{" . $mailbox['host'] . ":" . $mailbox['port'] . "/imap/ssl}" . $mailbox['inbox_folder'];
             $connection = imap_open($imapPath, $mailbox['username'], $mailbox['password']);
             
             if (!$connection) {
@@ -171,12 +170,15 @@ class BounceProcessor {
             // Process messages
             $processed = 0;
             foreach ($emails as $emailNumber) {
+                if ($processed >= $limit) {
+                    break;
+                }
                 // Get message headers
                 $header = imap_headerinfo($connection, $emailNumber);
                 
                 // Extract email address from subject or sender
-                $subject = $header->subject;
-                $from = $header->from[0]->mailbox . '@' . $header->from[0]->host;
+                $subject = isset($header->subject) ? imap_utf8($header->subject) : '';
+                $from = isset($header->from[0]) ? ($header->from[0]->mailbox . '@' . $header->from[0]->host) : '';
                 
                 // Check if it's a bounce message (simplified for demo)
                 $isBounce = false;
@@ -197,44 +199,51 @@ class BounceProcessor {
                         $rawMessage = imap_fetchbody($connection, $emailNumber, 1);
                     }
                     
-                    // Parse email headers for original to and cc addresses
+                    // Parse original message headers for To and Cc
                     $originalTo = '';
                     $ccAddresses = [];
-                    
+
                     if (!$isTestMode) {
-                        // In normal mode, extract original to and CC from message
-                        $headers = imap_fetchheader($connection, $emailNumber);
-                        
-                        // Extract To address
-                        if (preg_match('/To:\s*(.*?)(?:\r\n|\n)/i', $headers, $matches)) {
-                            $originalTo = trim($matches[1]);
-                        }
-                        
-                        // Extract CC addresses
-                        if (preg_match_all('/Cc:\s*(.*?)(?:\r\n|\n)/i', $headers, $matches)) {
-                            foreach ($matches[1] as $cc) {
-                                $ccAddresses = array_merge($ccAddresses, explode(',', $cc));
+                        $origHeaders = $this->extractOriginalMessageHeaders($connection, $emailNumber);
+                        if (!empty($origHeaders)) {
+                            if (preg_match('/^To:\s*(.*)$/im', $origHeaders, $matches)) {
+                                $originalTo = trim($matches[1]);
                             }
-                            // Clean up CC addresses
-                            $ccAddresses = array_map('trim', $ccAddresses);
-                            $ccAddresses = array_filter($ccAddresses);
+                            if (preg_match('/^Cc:\s*(.*)$/im', $origHeaders, $ccMatch)) {
+                                $ccLine = trim($ccMatch[1]);
+                                $ccAddresses = array_map('trim', array_filter(explode(',', $ccLine)));
+                            }
                         }
                     }
                     
                     // Log the bounce
                     $stmt = $this->db->prepare("INSERT INTO bounce_logs (mailbox_id, email_address, subject, error_code, error_message, original_to, cc_addresses) VALUES (?, ?, ?, ?, ?, ?, ?)");
                     $stmt->execute([$mailboxId, $emailAddress, $subject, '550', 'Mailbox unavailable', $originalTo, implode(',', $ccAddresses)]);
+
+                    $this->logActivity(
+                        'Bounce Detected',
+                        sprintf('Mailbox %d | Subject: %s | From: %s', $mailboxId, $subject, $emailAddress)
+                    );
                     
                     // In test mode, send to override recipients
                     if ($isTestMode && !empty($testSettings['recipients'])) {
-                        $this->sendTestBounceNotification($testSettings['recipients'], $emailAddress, $subject, $originalTo, $ccAddresses);
+                        $this->sendBounceNotification($testSettings['recipients'], $emailAddress, $subject, $originalTo, $ccAddresses, true);
+                    } elseif (!$isTestMode && !empty($ccAddresses)) {
+                        $this->sendBounceNotification(implode(',', $ccAddresses), $emailAddress, $subject, $originalTo, $ccAddresses, false);
                     }
                     
-                    // Mark as processed
+                    // Mark as processed and move if not test mode
                     $processed++;
+                    if (!$isTestMode) {
+                        $targetFolder = !empty($mailbox['processed_folder']) ? $mailbox['processed_folder'] : 'Processed';
+                        @imap_mail_move($connection, (string)$emailNumber, $targetFolder);
+                    }
                 }
             }
             
+            if (!$isTestMode) {
+                @imap_expunge($connection);
+            }
             imap_close($connection);
             
             $this->logActivity("Processed Bounces", "Processed $processed emails in mailbox ID: $mailboxId");
@@ -245,17 +254,77 @@ class BounceProcessor {
         }
     }
 
-    private function sendTestBounceNotification($recipients, $emailAddress, $subject, $originalTo, $ccAddresses) {
-        // In a real implementation, this would send actual emails
-        // For now we'll just log it
-        error_log("TEST MODE: Would send bounce notification to: " . $recipients);
-        error_log("Bounce details - Email: $emailAddress, Subject: $subject");
+    private function extractOriginalMessageHeaders($connection, $msgNo) {
+        $structure = imap_fetchstructure($connection, $msgNo);
+        $headers = '';
+        if (!$structure) {
+            return $headers;
+        }
+        // Traverse parts to find message/rfc822
+        $stack = [["struct" => $structure, "prefix" => ""]];
+        while (!empty($stack)) {
+            $item = array_pop($stack);
+            $struct = $item['struct'];
+            $prefix = $item['prefix'];
+            if (isset($struct->type) && isset($struct->subtype)) {
+                // TYPEMESSAGE == 2
+                if ((int)$struct->type === 2 && strtoupper($struct->subtype) === 'RFC822') {
+                    $partNo = ltrim($prefix, '.');
+                    $partNo = $partNo === '' ? '2' : $partNo; // try common part
+                    $body = @imap_fetchbody($connection, $msgNo, $partNo);
+                    if (!empty($body)) {
+                        // Try to split headers from body
+                        $segments = preg_split("/\r?\n\r?\n/", $body, 2);
+                        if (!empty($segments[0])) {
+                            return $segments[0];
+                        }
+                    }
+                }
+            }
+            if (!empty($struct->parts)) {
+                for ($i = 0; $i < count($struct->parts); $i++) {
+                    $child = $struct->parts[$i];
+                    $childPrefix = $prefix === '' ? (string)($i + 1) : ($prefix . '.' . ($i + 1));
+                    $stack[] = ["struct" => $child, "prefix" => $childPrefix];
+                }
+            }
+        }
+        // Fallback: try part 2 and part 3 directly
+        foreach (['2', '3'] as $p) {
+            $body = @imap_fetchbody($connection, $msgNo, $p);
+            if (!empty($body)) {
+                $segments = preg_split("/\r?\n\r?\n/", $body, 2);
+                if (!empty($segments[0])) {
+                    return $segments[0];
+                }
+            }
+        }
+        // As last resort, include top-level headers (less accurate)
+        return @imap_fetchheader($connection, $msgNo) ?: '';
+    }
+
+    private function sendBounceNotification($recipients, $emailAddress, $subject, $originalTo, $ccAddresses, $isTest) {
+        $to = $recipients;
+        $fromName = $this->config['notification_from_name'];
+        $fromEmail = $this->config['notification_from_email'];
+        $headers = [];
+        $headers[] = 'From: ' . sprintf('%s <%s>', $fromName, $fromEmail);
+        $headers[] = 'MIME-Version: 1.0';
+        $headers[] = 'Content-Type: text/plain; charset=UTF-8';
+        $bodyLines = [];
+        $bodyLines[] = $isTest ? '[TEST MODE] Bounce Notification' : 'Bounce Notification';
+        $bodyLines[] = '';
+        $bodyLines[] = 'Bounced email details:';
+        $bodyLines[] = 'Subject: ' . $subject;
+        $bodyLines[] = 'Reported From: ' . $emailAddress;
         if (!empty($originalTo)) {
-            error_log("Original To: $originalTo");
+            $bodyLines[] = 'Original To: ' . $originalTo;
         }
         if (!empty($ccAddresses)) {
-            error_log("CC Addresses: " . implode(', ', $ccAddresses));
+            $bodyLines[] = 'Original Cc: ' . implode(', ', $ccAddresses);
         }
+        $body = implode("\r\n", $bodyLines);
+        @mail($to, ($isTest ? '[TEST] ' : '') . 'Bounce Notification', $body, implode("\r\n", $headers));
     }
 
     public function getBounceLogs($mailboxId = null) {

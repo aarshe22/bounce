@@ -1,9 +1,11 @@
 \<?php
 // config.php - Configuration file
 return [
-    'db_path' => __DIR__ . '/bounce_processor.db',
+    'db_path' => __DIR__ . '/database.sqlite',
     'default_imap_host' => 'localhost',
     'default_imap_port' => 993,
+    'notification_from_email' => 'bounces@localhost',
+    'notification_from_name' => 'Bounce Handler',
     'smtp_error_codes' => [
         '550' => 'Mailbox unavailable or user does not exist',
         '552' => 'Mailbox full or message too large',

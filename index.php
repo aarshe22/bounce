@@ -1,55 +1,76 @@
 <?php
 // index.php - Main web interface
+session_start();
 require_once 'bounce.php';
 
+// Flash helpers
+function flash($key) {
+    if (!empty($_SESSION[$key])) {
+        $msg = $_SESSION[$key];
+        unset($_SESSION[$key]);
+        return $msg;
+    }
+    return null;
+}
+
 // Handle form submissions
-if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    if (isset($_POST['action'])) {
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
+    try {
         switch ($_POST['action']) {
             case 'add_mailbox':
-                $processor->addMailbox(
-                    $_POST['name'],
-                    $_POST['host'],
-                    $_POST['port'],
-                    $_POST['username'],
-                    $_POST['password'],
-                    $_POST['inbox_folder'],
-                    $_POST['processed_folder'],
-                    $_POST['skipped_folder']
+                $ok = $processor->addMailbox(
+                    trim($_POST['name'] ?? ''),
+                    trim($_POST['host'] ?? ''),
+                    (int)($_POST['port'] ?? 993),
+                    trim($_POST['username'] ?? ''),
+                    (string)($_POST['password'] ?? ''),
+                    trim($_POST['inbox_folder'] ?? 'INBOX'),
+                    trim($_POST['processed_folder'] ?? 'Processed'),
+                    trim($_POST['skipped_folder'] ?? 'Skipped')
                 );
+                $_SESSION[$ok ? 'success' : 'error'] = $ok ? 'Mailbox added.' : 'Failed to add mailbox.';
                 break;
             case 'update_mailbox':
-                $processor->updateMailbox(
-                    $_POST['id'],
-                    $_POST['name'],
-                    $_POST['host'],
-                    $_POST['port'],
-                    $_POST['username'],
-                    $_POST['password'],
-                    $_POST['inbox_folder'],
-                    $_POST['processed_folder'],
-                    $_POST['skipped_folder']
+                $ok = $processor->updateMailbox(
+                    (int)$_POST['id'],
+                    trim($_POST['name'] ?? ''),
+                    trim($_POST['host'] ?? ''),
+                    (int)($_POST['port'] ?? 993),
+                    trim($_POST['username'] ?? ''),
+                    (string)($_POST['password'] ?? ''),
+                    trim($_POST['inbox_folder'] ?? 'INBOX'),
+                    trim($_POST['processed_folder'] ?? 'Processed'),
+                    trim($_POST['skipped_folder'] ?? 'Skipped')
                 );
+                $_SESSION[$ok ? 'success' : 'error'] = $ok ? 'Mailbox updated.' : 'Failed to update mailbox.';
                 break;
             case 'delete_mailbox':
-                $processor->deleteMailbox($_POST['id']);
+                $ok = $processor->deleteMailbox((int)$_POST['id']);
+                $_SESSION[$ok ? 'success' : 'error'] = $ok ? 'Mailbox deleted.' : 'Failed to delete mailbox.';
                 break;
             case 'process_bounces':
-                $result = $processor->processBounces($_POST['mailbox_id']);
-                if ($result['error']) {
-                    $_SESSION['error'] = $result['error'];
-                } else {
-                    $_SESSION['success'] = "Processed {$result['processed']} bounce emails";
-                }
+                $result = $processor->processBounces((int)$_POST['mailbox_id']);
+                $_SESSION[$result['error'] ? 'error' : 'success'] = $result['error'] ?: ("Processed {$result['processed']} bounce emails");
+                break;
+            case 'update_test_settings':
+                $enabled = isset($_POST['test_enabled']) ? 1 : 0;
+                $recipients = trim($_POST['test_recipients'] ?? '');
+                $ok = $processor->updateTestSettings($enabled, $recipients);
+                $_SESSION[$ok ? 'success' : 'error'] = $ok ? 'Test settings saved.' : 'Failed to save test settings.';
                 break;
         }
+    } catch (Throwable $e) {
+        $_SESSION['error'] = $e->getMessage();
     }
+    header('Location: ' . $_SERVER['PHP_SELF']);
+    exit;
 }
 
 // Get data for display
 $mailboxes = $processor->getMailboxes();
 $bounceLogs = $processor->getBounceLogs();
 $activityLogs = $processor->getActivityLogs();
+$testSettings = $processor->getTestSettings();
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -113,6 +134,12 @@ $activityLogs = $processor->getActivityLogs();
     </div>
 
     <div class="container">
+        <?php if ($msg = flash('success')): ?>
+            <div class="alert alert-success"><?php echo htmlspecialchars($msg); ?></div>
+        <?php endif; ?>
+        <?php if ($msg = flash('error')): ?>
+            <div class="alert alert-danger"><?php echo htmlspecialchars($msg); ?></div>
+        <?php endif; ?>
         <!-- Stats Cards -->
         <div class="row mb-4">
             <div class="col-md-3">
@@ -140,10 +167,27 @@ $activityLogs = $processor->getActivityLogs();
                 </div>
             </div>
             <div class="col-md-3">
-                <div class="card text-center">
+                <div class="card">
                     <div class="card-body">
-                        <h3 class="text-info"><i class="fas fa-cogs"></i> 0</h3>
-                        <p class="text-muted">Processing Tasks</p>
+                        <div class="d-flex justify-content-between align-items-center">
+                            <div>
+                                <h5 class="mb-1">Test Mode</h5>
+                                <div class="text-muted small">When enabled, notifications go only to override recipients and no messages are moved.</div>
+                            </div>
+                            <span class="badge <?php echo $testSettings['enabled'] ? 'bg-success' : 'bg-secondary'; ?>"><?php echo $testSettings['enabled'] ? 'Enabled' : 'Disabled'; ?></span>
+                        </div>
+                        <form class="mt-3" method="POST">
+                            <input type="hidden" name="action" value="update_test_settings">
+                            <div class="form-check form-switch mb-2">
+                                <input class="form-check-input" type="checkbox" id="test_enabled" name="test_enabled" <?php echo $testSettings['enabled'] ? 'checked' : ''; ?>>
+                                <label class="form-check-label" for="test_enabled">Enable Test Mode</label>
+                            </div>
+                            <div class="mb-2">
+                                <label for="test_recipients" class="form-label">Override Recipients (comma-separated)</label>
+                                <input type="text" class="form-control" id="test_recipients" name="test_recipients" value="<?php echo htmlspecialchars($testSettings['recipients']); ?>" placeholder="user@example.com, team@example.com">
+                            </div>
+                            <button type="submit" class="btn btn-sm btn-primary">Save</button>
+                        </form>
                     </div>
                 </div>
             </div>
@@ -170,17 +214,21 @@ $activityLogs = $processor->getActivityLogs();
                                             <i class="fas fa-lock me-2"></i>Port: <?php echo $mailbox['port']; ?>
                                         </p>
                                         <div class="d-flex justify-content-between">
-                                            <button class="btn btn-sm btn-outline-primary" onclick="showEditModal(<?php echo $mailbox['id']; ?>)">
+                                            <button class="btn btn-sm btn-outline-primary" onclick="showEditModal(<?php echo (int)$mailbox['id']; ?>)">
                                                 <i class="fas fa-edit me-1"></i>Edit
                                             </button>
-                                            <button class="btn btn-sm btn-outline-danger" onclick="confirmDelete(<?php echo $mailbox['id']; ?>, '<?php echo htmlspecialchars($mailbox['name']); ?>')">
+                                            <button class="btn btn-sm btn-outline-danger" onclick="confirmDelete(<?php echo (int)$mailbox['id']; ?>, '<?php echo htmlspecialchars($mailbox['name']); ?>')">
                                                 <i class="fas fa-trash me-1"></i>Delete
                                             </button>
                                         </div>
                                         <div class="mt-2">
-                                            <button class="btn btn-sm btn-success w-100" onclick="processBounces(<?php echo $mailbox['id']; ?>)">
+                                            <form method="POST">
+                                                <input type="hidden" name="action" value="process_bounces">
+                                                <input type="hidden" name="mailbox_id" value="<?php echo (int)$mailbox['id']; ?>">
+                                                <button type="submit" class="btn btn-sm btn-success w-100">
                                                 <i class="fas fa-sync-alt me-1"></i>Process Bounces
-                                            </button>
+                                                </button>
+                                            </form>
                                         </div>
                                     </div>
                                 </div>
@@ -251,7 +299,7 @@ $activityLogs = $processor->getActivityLogs();
                                     <tr>
                                         <td><?php echo date('Y-m-d H:i:s', strtotime($log['timestamp'])); ?></td>
                                         <td><?php echo htmlspecialchars($log['action']); ?></td>
-                                        <td><?php echo htmlspecialchars($log['description']); ?></td>
+                                        <td><?php echo htmlspecialchars($log['details']); ?></td>
                                     </tr>
                                 <?php endforeach; ?>
                             </tbody>
@@ -299,6 +347,14 @@ $activityLogs = $processor->getActivityLogs();
                                 <label for="inbox_folder" class="form-label">Inbox Folder</label>
                                 <input type="text" class="form-control" id="inbox_folder" name="inbox_folder" value="INBOX">
                             </div>
+                            <div class="col-md-6 mb-3">
+                                <label for="processed_folder" class="form-label">Processed Folder</label>
+                                <input type="text" class="form-control" id="processed_folder" name="processed_folder" value="Processed">
+                            </div>
+                            <div class="col-md-6 mb-3">
+                                <label for="skipped_folder" class="form-label">Skipped Folder</label>
+                                <input type="text" class="form-control" id="skipped_folder" name="skipped_folder" value="Skipped">
+                            </div>
                         </div>
                     </div>
                     <div class="modal-footer">
@@ -334,7 +390,7 @@ $activityLogs = $processor->getActivityLogs();
         let currentDeleteId = null;
 
         function showAddModal() {
-            document.getElementById('actionInput').value = 'add';
+            document.getElementById('actionInput').value = 'add_mailbox';
             document.getElementById('modalTitle').textContent = 'Add Mailbox';
             document.getElementById('idInput').value = '';
             document.getElementById('name').value = '';
@@ -343,21 +399,25 @@ $activityLogs = $processor->getActivityLogs();
             document.getElementById('username').value = '';
             document.getElementById('password').value = '';
             document.getElementById('inbox_folder').value = 'INBOX';
+            document.getElementById('processed_folder').value = 'Processed';
+            document.getElementById('skipped_folder').value = 'Skipped';
             new bootstrap.Modal(document.getElementById('mailboxModal')).show();
         }
 
         function showEditModal(id) {
-            // In a real application, you would fetch the mailbox data
-            // For now, we'll just show the modal with placeholder values
-            document.getElementById('actionInput').value = 'edit';
+            const mailbox = <?php echo json_encode($mailboxes, JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP); ?>.find(m => parseInt(m.id, 10) === id);
+            if (!mailbox) return;
+            document.getElementById('actionInput').value = 'update_mailbox';
             document.getElementById('modalTitle').textContent = 'Edit Mailbox';
-            document.getElementById('idInput').value = id;
-            document.getElementById('name').value = 'Mailbox ' + id;
-            document.getElementById('host').value = 'imap.example.com';
-            document.getElementById('port').value = '993';
-            document.getElementById('username').value = 'user@example.com';
+            document.getElementById('idInput').value = mailbox.id;
+            document.getElementById('name').value = mailbox.name;
+            document.getElementById('host').value = mailbox.host;
+            document.getElementById('port').value = mailbox.port;
+            document.getElementById('username').value = mailbox.username;
             document.getElementById('password').value = '';
-            document.getElementById('inbox_folder').value = 'INBOX';
+            document.getElementById('inbox_folder').value = mailbox.inbox_folder;
+            document.getElementById('processed_folder').value = mailbox.processed_folder;
+            document.getElementById('skipped_folder').value = mailbox.skipped_folder;
             new bootstrap.Modal(document.getElementById('mailboxModal')).show();
         }
 
@@ -369,15 +429,12 @@ $activityLogs = $processor->getActivityLogs();
 
         function confirmDeleteSubmit() {
             if (currentDeleteId !== null) {
-                // In a real application, you would make an AJAX request to delete
-                alert('Mailbox deleted successfully!');
-                location.reload(); // Reload to reflect changes
+                const form = document.createElement('form');
+                form.method = 'POST';
+                form.innerHTML = '<input type="hidden" name="action" value="delete_mailbox"><input type="hidden" name="id" value="' + currentDeleteId + '">';
+                document.body.appendChild(form);
+                form.submit();
             }
-        }
-
-        function processBounces(id) {
-            alert('Processing bounces for mailbox ' + id);
-            // In a real application, you would make an AJAX request to process bounces
         }
     </script>
 </body>
