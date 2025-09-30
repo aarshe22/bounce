@@ -224,8 +224,13 @@ class BounceProcessor {
             $isTestMode = (bool)$testSettings['enabled'];
             $this->logActivity('IMAP Connect', sprintf('Mailbox %d host=%s port=%d folder=%s', $mailboxId, $mailbox['host'], $mailbox['port'], $mailbox['inbox_folder']));
             
-            // Connect to IMAP
-            $imapPath = "{" . $mailbox['host'] . ":" . $mailbox['port'] . "/imap/ssl}" . $mailbox['inbox_folder'];
+            // Connect to IMAP (support ssl/tls/none)
+            $sec = strtolower($mailbox['security'] ?? 'ssl');
+            $flag = '/imap';
+            if ($sec === 'ssl') { $flag .= '/ssl'; }
+            elseif ($sec === 'tls') { $flag .= '/tls'; }
+            else { /* none */ }
+            $imapPath = "{" . $mailbox['host'] . ":" . $mailbox['port'] . $flag . "}" . $mailbox['inbox_folder'];
             $connection = imap_open($imapPath, $mailbox['username'], $mailbox['password']);
             
             if (!$connection) {

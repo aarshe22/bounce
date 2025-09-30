@@ -57,7 +57,9 @@ if ((($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') && isset($_POST['action']
                     (string)($_POST['password'] ?? ''),
                     trim($_POST['inbox_folder'] ?? 'INBOX'),
                     trim($_POST['processed_folder'] ?? 'Processed'),
-                    trim($_POST['skipped_folder'] ?? 'Skipped')
+                    trim($_POST['skipped_folder'] ?? 'Skipped'),
+                    'Problem',
+                    strtolower(trim($_POST['security'] ?? 'ssl'))
                 );
                 $_SESSION[$ok ? 'success' : 'error'] = $ok ? 'Mailbox added.' : 'Failed to add mailbox.';
                 break;
@@ -71,7 +73,9 @@ if ((($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') && isset($_POST['action']
                     (string)($_POST['password'] ?? ''),
                     trim($_POST['inbox_folder'] ?? 'INBOX'),
                     trim($_POST['processed_folder'] ?? 'Processed'),
-                    trim($_POST['skipped_folder'] ?? 'Skipped')
+                    trim($_POST['skipped_folder'] ?? 'Skipped'),
+                    'Problem',
+                    strtolower(trim($_POST['security'] ?? 'ssl'))
                 );
                 $_SESSION[$ok ? 'success' : 'error'] = $ok ? 'Mailbox updated.' : 'Failed to update mailbox.';
                 break;
@@ -461,6 +465,14 @@ $smtpSettings = $processor->getSmtpSettings();
                                 <input type="text" class="form-control" id="inbox_folder" name="inbox_folder" value="INBOX">
                             </div>
                             <div class="col-md-6 mb-3">
+                                <label for="security" class="form-label">Security</label>
+                                <select class="form-select" id="security" name="security">
+                                    <option value="ssl">SSL (993)</option>
+                                    <option value="tls">STARTTLS (143)</option>
+                                    <option value="none">Plain (143)</option>
+                                </select>
+                            </div>
+                            <div class="col-md-6 mb-3">
                                 <label for="processed_folder" class="form-label">Processed Folder</label>
                                 <input type="text" class="form-control" id="processed_folder" name="processed_folder" value="Processed">
                             </div>
@@ -533,6 +545,7 @@ $smtpSettings = $processor->getSmtpSettings();
             document.getElementById('inbox_folder').value = mailbox.inbox_folder;
             document.getElementById('processed_folder').value = mailbox.processed_folder;
             document.getElementById('skipped_folder').value = mailbox.skipped_folder;
+            if (mailbox.security) { document.getElementById('security').value = mailbox.security; }
             new bootstrap.Modal(document.getElementById('mailboxModal')).show();
         }
 
