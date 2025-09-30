@@ -225,11 +225,12 @@ class BounceProcessor {
             $this->logActivity('IMAP Connect', sprintf('Mailbox %d host=%s port=%d folder=%s', $mailboxId, $mailbox['host'], $mailbox['port'], $mailbox['inbox_folder']));
             
             // Connect to IMAP (support ssl/tls/none)
-            $sec = strtolower($mailbox['security'] ?? 'ssl');
+            $rawSec = isset($mailbox['security']) ? strtolower((string)$mailbox['security']) : '';
+            $sec = $rawSec !== '' ? $rawSec : ((int)$mailbox['port'] === 993 ? 'ssl' : 'none');
             $flag = '/imap';
-            if ($sec === 'ssl') { $flag .= '/ssl'; }
-            elseif ($sec === 'tls') { $flag .= '/tls'; }
-            else { /* none */ }
+            if ($sec === 'ssl') { $flag .= '/ssl/novalidate-cert'; }
+            elseif ($sec === 'tls') { $flag .= '/tls/novalidate-cert'; }
+            else { $flag .= '/notls'; }
             $imapPath = "{" . $mailbox['host'] . ":" . $mailbox['port'] . $flag . "}" . $mailbox['inbox_folder'];
             $connection = imap_open($imapPath, $mailbox['username'], $mailbox['password']);
             
