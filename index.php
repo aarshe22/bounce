@@ -225,8 +225,13 @@ $smtpSettings = $processor->getSmtpSettings();
                     </div>
                 </div>
             </div>
-            <div class="col-md-3">
-                <div class="card mb-3">
+            </div>
+        </div>
+
+        <!-- Test Mode Card on its own row -->
+        <div class="row mb-3">
+            <div class="col-12">
+                <div class="card">
                     <div class="card-body">
                         <div class="d-flex justify-content-between align-items-center">
                             <div>
@@ -249,6 +254,12 @@ $smtpSettings = $processor->getSmtpSettings();
                         </form>
                     </div>
                 </div>
+            </div>
+        </div>
+
+        <!-- SMTP Relay Card on its own row -->
+        <div class="row mb-4">
+            <div class="col-12">
                 <div class="card">
                     <div class="card-body">
                         <h5 class="mb-3">SMTP Relay (optional)</h5>
