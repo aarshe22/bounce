@@ -7,13 +7,19 @@ $config = require 'config.php';
 class BounceProcessor {
     private $db;
     private $config;
+    private $readOnly;
 
-    public function __construct($config) {
+    public function __construct($config, $readOnly = false) {
         $this->config = $config;
+        $this->readOnly = (bool)$readOnly;
         $this->db = new PDO("sqlite:" . $this->config['db_path']);
         $this->db->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
-        $this->db->exec('PRAGMA busy_timeout = 5000');
-        $this->createDatabaseTables();
+        $this->db->exec('PRAGMA journal_mode=WAL');
+        $this->db->exec('PRAGMA synchronous=NORMAL');
+        $this->db->exec('PRAGMA busy_timeout = 10000');
+        if (!$this->readOnly) {
+            $this->createDatabaseTables();
+        }
     }
 
     private function createDatabaseTables() {
@@ -68,13 +74,18 @@ class BounceProcessor {
             from_name TEXT DEFAULT ''
         )");
         
-        // Initialize test settings if not exists
-        $stmt = $this->db->prepare("INSERT OR IGNORE INTO test_settings (id, enabled, recipients) VALUES (1, 0, '')");
-        $stmt->execute();
-        
-        // Initialize smtp settings if not exists
-        $stmt = $this->db->prepare("INSERT OR IGNORE INTO smtp_settings (id, host, port, username, password, security, from_email, from_name) VALUES (1, '', 587, '', '', 'tls', '', '')");
-        $stmt->execute();
+        try {
+            $stmt = $this->db->prepare("INSERT OR IGNORE INTO test_settings (id, enabled, recipients) VALUES (1, 0, '')");
+            $stmt->execute();
+        } catch (Exception $e) {
+            // ignore
+        }
+        try {
+            $stmt = $this->db->prepare("INSERT OR IGNORE INTO smtp_settings (id, host, port, username, password, security, from_email, from_name) VALUES (1, '', 587, '', '', 'tls', '', '')");
+            $stmt->execute();
+        } catch (Exception $e) {
+            // ignore
+        }
     }
 
     public function logActivity($action, $details = '') {
@@ -500,7 +511,4 @@ class BounceProcessor {
         }
     }
 }
-
-// Initialize processor
-$processor = new BounceProcessor($config);
 ?>
