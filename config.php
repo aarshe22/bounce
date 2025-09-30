@@ -2,7 +2,7 @@
 // Configuration file for bounce handler system
 
 // Database configuration
-define('DB_FILE', 'bounce_handler.db');
+define('DB_FILE', 'database.sqlite');
 
 // Default IMAP settings (can be overridden per mailbox)
 define('DEFAULT_IMAP_HOST', '{localhost:993/imap/ssl}');
