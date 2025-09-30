@@ -11,7 +11,7 @@ class BounceProcessor {
     public function __construct($config) {
         $this->config = $config;
         $this->db = new PDO("sqlite:" . $this->config['db_path']);
-        $this->db->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+.        $this->db->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
         $this->db->exec('PRAGMA busy_timeout = 5000');
         $this->createDatabaseTables();
     }
@@ -190,6 +190,7 @@ class BounceProcessor {
             // Get test settings
             $testSettings = $this->getTestSettings();
             $isTestMode = (bool)$testSettings['enabled'];
+            $this->logActivity('IMAP Connect', sprintf('Mailbox %d host=%s port=%d folder=%s', $mailboxId, $mailbox['host'], $mailbox['port'], $mailbox['inbox_folder']));
             
             // Connect to IMAP
             $imapPath = "{" . $mailbox['host'] . ":" . $mailbox['port'] . "/imap/ssl}" . $mailbox['inbox_folder'];
@@ -201,6 +202,7 @@ class BounceProcessor {
             
             // Search for unread bounce messages
             $search = 'UNSEEN';
+            $this->logActivity('IMAP Search', $search);
             $emails = imap_search($connection, $search);
             
             if (!$emails) {
@@ -221,6 +223,7 @@ class BounceProcessor {
                 // Extract email address from subject or sender
                 $subject = isset($header->subject) ? imap_utf8($header->subject) : '';
                 $from = isset($header->from[0]) ? ($header->from[0]->mailbox . '@' . $header->from[0]->host) : '';
+                $this->logActivity('IMAP Message', sprintf('#%d Subject=%s From=%s', $emailNumber, $subject, $from));
                 
                 // Check if it's a bounce message (simplified for demo)
                 $isBounce = false;
@@ -269,8 +272,10 @@ class BounceProcessor {
                     
                     // In test mode, send to override recipients
                     if ($isTestMode && !empty($testSettings['recipients'])) {
+                        $this->logActivity('Notify', 'Sending test bounce notification');
                         $this->sendBounceNotification($testSettings['recipients'], $emailAddress, $subject, $originalTo, $ccAddresses, true);
                     } elseif (!$isTestMode && !empty($ccAddresses)) {
+                        $this->logActivity('Notify', 'Sending bounce notification to original Cc');
                         $this->sendBounceNotification(implode(',', $ccAddresses), $emailAddress, $subject, $originalTo, $ccAddresses, false);
                     }
                     
@@ -278,12 +283,14 @@ class BounceProcessor {
                     $processed++;
                     if (!$isTestMode) {
                         $targetFolder = !empty($mailbox['processed_folder']) ? $mailbox['processed_folder'] : 'Processed';
+                        $this->logActivity('IMAP Move', sprintf('#%d -> %s', $emailNumber, $targetFolder));
                         @imap_mail_move($connection, (string)$emailNumber, $targetFolder);
                     }
                 }
             }
             
             if (!$isTestMode) {
+                $this->logActivity('IMAP Expunge', 'Committing moved messages');
                 @imap_expunge($connection);
             }
             imap_close($connection);
