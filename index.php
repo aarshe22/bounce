@@ -3,6 +3,9 @@
 require_once 'db.php';
 require_once 'bounce.php';
 
+// Check if we're running from CLI or web
+$is_cli = (php_sapi_name() === 'cli');
+
 // Initialize database using PDO (matching db.php's approach)
 try {
     $db = new PDO('sqlite:app.db');
@@ -42,9 +45,13 @@ try {
     die("Database connection failed: " . $e->getMessage());
 }
 
-// Define test mode constants for the form
-define('TEST_MODE', false);
-define('TEST_RECIPIENTS', []);
+// Only define constants if they don't already exist
+if (!defined('TEST_MODE')) {
+    define('TEST_MODE', false);
+}
+if (!defined('TEST_RECIPIENTS')) {
+    define('TEST_RECIPIENTS', []);
+}
 
 ?>
 <!DOCTYPE html>
@@ -82,8 +89,8 @@ define('TEST_RECIPIENTS', []);
         <a href="?action=add" class="btn btn-primary">Add Mailbox</a>
         
         <?php
-        // Handle form submissions
-        if ($_SERVER['REQUEST_METHOD'] == 'POST') {
+        // Handle form submissions - only if running in web mode
+        if (!$is_cli && $_SERVER['REQUEST_METHOD'] == 'POST') {
             $action = $_POST['action'];
             
             if ($action == 'add_mailbox') {
@@ -115,16 +122,16 @@ define('TEST_RECIPIENTS', []);
                 </thead>
                 <tbody>
                     <?php foreach ($mailboxes as $mailbox): ?>
-                        <tr>
-                            <td><?php echo htmlspecialchars($mailbox['name']); ?></td>
-                            <td><?php echo htmlspecialchars($mailbox['host']); ?></td>
-                            <td><?php echo htmlspecialchars($mailbox['port']); ?></td>
-                            <td><?php echo htmlspecialchars($mailbox['username']); ?></td>
-                            <td>
-                                <a href="?action=edit&id=<?php echo $mailbox['id']; ?>" class="btn btn-success">Edit</a>
-                                <a href="?action=delete&id=<?php echo $mailbox['id']; ?>" class="btn btn-danger" onclick="return confirm('Are you sure?')">Delete</a>
-                            </td>
-                        </tr>
+                    <tr>
+                        <td><?php echo htmlspecialchars($mailbox['name']); ?></td>
+                        <td><?php echo htmlspecialchars($mailbox['host']); ?></td>
+                        <td><?php echo htmlspecialchars($mailbox['port']); ?></td>
+                        <td><?php echo htmlspecialchars($mailbox['username']); ?></td>
+                        <td>
+                            <a href="?action=edit&id=<?php echo $mailbox['id']; ?>" class="btn btn-success">Edit</a>
+                            <a href="?action=delete&id=<?php echo $mailbox['id']; ?>" class="btn btn-danger" onclick="return confirm('Are you sure?')">Delete</a>
+                        </td>
+                    </tr>
                     <?php endforeach; ?>
                 </tbody>
             </table>
@@ -133,7 +140,6 @@ define('TEST_RECIPIENTS', []);
         <?php endif; ?>
         
         <h2>Test Mode Settings</h2>
-        
         <form method="POST">
             <input type="hidden" name="action" value="test_settings">
             <div class="form-group">
@@ -141,16 +147,14 @@ define('TEST_RECIPIENTS', []);
             </div>
             <div class="form-group">
                 <label for="recipients">Test Recipients (comma separated):</label>
-                <input type="text" id="recipients" name="recipients" value="">
+                <input type="text" id="recipients" name="recipients" value="<?php echo htmlspecialchars(implode(',', TEST_RECIPIENTS)); ?>">
             </div>
             <button type="submit" class="btn btn-primary">Save Settings</button>
         </form>
         
         <h2>Activity Log</h2>
-        
         <?php
-        // Since you're not implementing getActivityLog function in index.php, 
-        // we'll show a simple query instead of calling the db.php function
+        // Get activity log entries
         $stmt = $db->query("SELECT * FROM activity_log ORDER BY timestamp DESC LIMIT 20");
         $logs = $stmt->fetchAll(PDO::FETCH_ASSOC);
         
@@ -165,11 +169,11 @@ define('TEST_RECIPIENTS', []);
                 </thead>
                 <tbody>
                     <?php foreach ($logs as $log): ?>
-                        <tr>
-                            <td><?php echo htmlspecialchars($log['type']); ?></td>
-                            <td><?php echo htmlspecialchars($log['message']); ?></td>
-                            <td><?php echo htmlspecialchars($log['timestamp']); ?></td>
-                        </tr>
+                    <tr>
+                        <td><?php echo htmlspecialchars($log['type']); ?></td>
+                        <td><?php echo htmlspecialchars($log['message']); ?></td>
+                        <td><?php echo htmlspecialchars($log['timestamp']); ?></td>
+                    </tr>
                     <?php endforeach; ?>
                 </tbody>
             </table>
