@@ -438,21 +438,24 @@ class BounceProcessor {
         if (!empty($smtpHost)) {
             $smtpFromEmail = !empty($smtp['from_email']) ? $smtp['from_email'] : $fromEmail;
             $smtpFromName = !empty($smtp['from_name']) ? $smtp['from_name'] : $fromName;
-            $ok = $this->sendViaSmtp($to, $subject, $body, $smtpFromName, $smtpFromEmail, $smtp);
-            $this->logActivity('SMTP Test', $ok ? ('Sent to ' . $to) : ('Failed to send to ' . $to));
+            $this->logActivity('SMTP Test', sprintf('Attempt host=%s port=%s security=%s from=%s to=%s',
+                $smtp['host'], $smtp['port'] ?? '', strtolower($smtp['security'] ?? ''), $smtpFromEmail, $to));
+            $ok = $this->sendViaSmtp($to, $subject, $body, $smtpFromName, $smtpFromEmail, $smtp, true);
+            $this->logActivity('SMTP Test', $ok ? ('Result=SUCCESS to ' . $to) : ('Result=FAIL to ' . $to));
             return $ok;
         } else {
             $headers = [];
             $headers[] = 'From: ' . sprintf('%s <%s>', $fromName, $fromEmail);
             $headers[] = 'MIME-Version: 1.0';
             $headers[] = 'Content-Type: text/plain; charset=UTF-8';
+            $this->logActivity('SMTP Test (mail())', sprintf('Attempt from=%s to=%s headers=%s', $fromEmail, $to, implode('; ', $headers)));
             $ok = @mail($to, $subject, $body, implode("\r\n", $headers));
-            $this->logActivity('SMTP Test (mail())', $ok ? ('Sent to ' . $to) : ('Failed to send to ' . $to));
+            $this->logActivity('SMTP Test (mail())', $ok ? ('Result=SUCCESS to ' . $to) : ('Result=FAIL to ' . $to));
             return $ok;
         }
     }
 
-    private function sendViaSmtp($to, $subject, $body, $fromName, $fromEmail, $smtp) {
+    private function sendViaSmtp($to, $subject, $body, $fromName, $fromEmail, $smtp, $verbose = false) {
         $host = $smtp['host'] ?? '';
         $port = (int)($smtp['port'] ?? 587);
         $username = $smtp['username'] ?? '';
@@ -463,9 +466,11 @@ class BounceProcessor {
         $transport = ($security === 'ssl') ? 'ssl://' . $host : $host;
 
         $errno = 0; $errstr = '';
+        if ($verbose) { $this->logActivity('SMTP', sprintf('Connect %s:%d security=%s', $host, $port, $security)); }
         $fp = @fsockopen($security === 'ssl' ? 'ssl://' . $host : $host, $port, $errno, $errstr, 10);
         if (!$fp) {
             error_log('SMTP connection failed: ' . $errstr);
+            if ($verbose) { $this->logActivity('SMTP', 'Connect failed: ' . $errstr); }
             return false;
         }
 
@@ -482,50 +487,57 @@ class BounceProcessor {
         };
 
         $read();
-        $write('EHLO localhost');
+        $write('EHLO localhost'); if ($verbose) { $this->logActivity('SMTP', 'C: EHLO localhost'); }
         $ehlo = $read();
+        if ($verbose) { $this->logActivity('SMTP', 'S: ' . trim($ehlo)); }
 
         if ($security === 'tls') {
-            $write('STARTTLS');
+            $write('STARTTLS'); if ($verbose) { $this->logActivity('SMTP', 'C: STARTTLS'); }
             $starttls = $read();
+            if ($verbose) { $this->logActivity('SMTP', 'S: ' . trim($starttls)); }
             if (strpos($starttls, '220') !== 0) {
                 fclose($fp);
                 error_log('SMTP STARTTLS failed');
+                if ($verbose) { $this->logActivity('SMTP', 'STARTTLS failed'); }
                 return false;
             }
             if (!stream_socket_enable_crypto($fp, true, STREAM_CRYPTO_METHOD_TLS_CLIENT)) {
                 fclose($fp);
                 error_log('SMTP TLS negotiation failed');
+                if ($verbose) { $this->logActivity('SMTP', 'TLS negotiation failed'); }
                 return false;
             }
-            $write('EHLO localhost');
+            $write('EHLO localhost'); if ($verbose) { $this->logActivity('SMTP', 'C: EHLO localhost (post-TLS)'); }
             $ehlo = $read();
+            if ($verbose) { $this->logActivity('SMTP', 'S: ' . trim($ehlo)); }
         }
 
         if (!empty($username)) {
-            $write('AUTH LOGIN');
+            $write('AUTH LOGIN'); if ($verbose) { $this->logActivity('SMTP', 'C: AUTH LOGIN'); }
             $read();
-            $write(base64_encode($username));
+            $write(base64_encode($username)); if ($verbose) { $this->logActivity('SMTP', 'C: <username base64>'); }
             $read();
-            $write(base64_encode($password));
+            $write(base64_encode($password)); if ($verbose) { $this->logActivity('SMTP', 'C: <password base64>'); }
             $authResp = $read();
+            if ($verbose) { $this->logActivity('SMTP', 'S: ' . trim($authResp)); }
             if (strpos($authResp, '235') !== 0) {
                 fclose($fp);
                 error_log('SMTP authentication failed');
+                if ($verbose) { $this->logActivity('SMTP', 'AUTH failed'); }
                 return false;
             }
         }
 
-        $write('MAIL FROM: <' . $fromEmail . '>');
+        $write('MAIL FROM: <' . $fromEmail . '>'); if ($verbose) { $this->logActivity('SMTP', 'C: MAIL FROM: <' . $fromEmail . '>'); }
         $read();
         // Support multiple recipients separated by comma
         $recipients = array_map('trim', explode(',', $to));
         foreach ($recipients as $rcpt) {
             if ($rcpt === '') continue;
-            $write('RCPT TO: <' . $rcpt . '>');
+            $write('RCPT TO: <' . $rcpt . '>'); if ($verbose) { $this->logActivity('SMTP', 'C: RCPT TO: <' . $rcpt . '>'); }
             $read();
         }
-        $write('DATA');
+        $write('DATA'); if ($verbose) { $this->logActivity('SMTP', 'C: DATA'); }
         $read();
 
         $headers = [];
@@ -535,9 +547,10 @@ class BounceProcessor {
         $headers[] = 'MIME-Version: 1.0';
         $headers[] = 'Content-Type: text/plain; charset=UTF-8';
         $message = implode("\r\n", $headers) . "\r\n\r\n" . $body . "\r\n.";
+        if ($verbose) { $this->logActivity('SMTP', 'C: [headers+body+\".\"]'); }
         $write($message);
         $read();
-        $write('QUIT');
+        $write('QUIT'); if ($verbose) { $this->logActivity('SMTP', 'C: QUIT'); }
         fclose($fp);
         return true;
     }
