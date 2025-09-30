@@ -8,7 +8,7 @@ $is_cli = (php_sapi_name() === 'cli');
 
 // Initialize database using PDO (matching db.php's approach)
 try {
-    $db = new PDO('sqlite:app.db');
+    $db = new PDO('sqlite:database.sqlite');
     $db->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
     
     // Create tables if they don't exist (matching your db.php structure)
@@ -47,7 +47,7 @@ try {
         die("Database connection failed: " . $e->getMessage());
     } else {
         echo "<div class='notification error'>Database connection failed: " . $e->getMessage() . "</div>";
-        echo "<div class='notification error'>Please check that the web server has write permissions to the app.db file.</div>";
+        echo "<div class='notification error'>Please check that the web server has write permissions to database.sqlite</div>";
         // Don't die in web mode, just show error
     }
 }
@@ -95,7 +95,7 @@ if (!defined('TEST_RECIPIENTS')) {
             $stmt = $db->query("SELECT 1");
         } catch (PDOException $e) {
             echo "<div class='notification error'>Database access error: " . $e->getMessage() . "</div>";
-            echo "<div class='notification error'>Please ensure the web server has write permissions to /var/www/html/imap-bounce/app.db</div>";
+            echo "<div class='notification error'>Please ensure the web server has write permissions to database.sqlite</div>";
         }
         ?>
 
@@ -109,12 +109,12 @@ if (!defined('TEST_RECIPIENTS')) {
             </div>
             <div class="form-group">
                 <label for="recipients">Test Recipients (comma separated):</label>
-                <input type="text" id="recipients" name="recipients" value="<?php echo htmlspecialchars(implode(',', TEST_RECIPIENTS)); ?>">
+                <input type="text" id="recipients" name="recipients" value="<?php echo implode(',', TEST_RECIPIENTS); ?>" style="width: 100%;">
             </div>
             <button type="submit" class="btn btn-primary">Save Settings</button>
         </form>
 
-        <!-- Rest of your existing content -->
+        <!-- Rest of your HTML content -->
     </div>
 </body>
 </html>
