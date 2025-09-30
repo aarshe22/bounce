@@ -41,8 +41,21 @@ class BounceProcessor {
             inbox_folder TEXT DEFAULT 'INBOX',
             processed_folder TEXT DEFAULT 'Processed',
             skipped_folder TEXT DEFAULT 'Skipped',
+            problem_folder TEXT DEFAULT 'Problem',
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP
         )");
+
+        // Backfill missing problem_folder column for existing installations
+        try {
+            $cols = $this->db->query("PRAGMA table_info(mailboxes)")->fetchAll(PDO::FETCH_ASSOC);
+            $hasProblem = false;
+            foreach ($cols as $c) { if (isset($c['name']) && $c['name'] === 'problem_folder') { $hasProblem = true; break; } }
+            if (!$hasProblem) {
+                $this->db->exec("ALTER TABLE mailboxes ADD COLUMN problem_folder TEXT DEFAULT 'Problem'");
+            }
+        } catch (Exception $e) {
+            // ignore
+        }
 
         $this->db->exec("CREATE TABLE IF NOT EXISTS bounce_logs (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -110,10 +123,10 @@ class BounceProcessor {
         return $stmt->fetchAll(PDO::FETCH_ASSOC);
     }
 
-    public function addMailbox($name, $host, $port, $username, $password, $inbox_folder = 'INBOX', $processed_folder = 'Processed', $skipped_folder = 'Skipped') {
+    public function addMailbox($name, $host, $port, $username, $password, $inbox_folder = 'INBOX', $processed_folder = 'Processed', $skipped_folder = 'Skipped', $problem_folder = 'Problem') {
         try {
-            $stmt = $this->db->prepare("INSERT INTO mailboxes (name, host, port, username, password, inbox_folder, processed_folder, skipped_folder) VALUES (?, ?, ?, ?, ?, ?, ?, ?)");
-            $result = $stmt->execute([$name, $host, $port, $username, $password, $inbox_folder, $processed_folder, $skipped_folder]);
+            $stmt = $this->db->prepare("INSERT INTO mailboxes (name, host, port, username, password, inbox_folder, processed_folder, skipped_folder, problem_folder) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)");
+            $result = $stmt->execute([$name, $host, $port, $username, $password, $inbox_folder, $processed_folder, $skipped_folder, $problem_folder]);
             $this->logActivity("Added Mailbox", "Name: $name");
             return $result;
         } catch (Exception $e) {
@@ -122,16 +135,16 @@ class BounceProcessor {
         }
     }
 
-    public function updateMailbox($id, $name, $host, $port, $username, $password, $inbox_folder = 'INBOX', $processed_folder = 'Processed', $skipped_folder = 'Skipped') {
+    public function updateMailbox($id, $name, $host, $port, $username, $password, $inbox_folder = 'INBOX', $processed_folder = 'Processed', $skipped_folder = 'Skipped', $problem_folder = 'Problem') {
         try {
             // Check if password is provided
             if (!empty($password)) {
-                $stmt = $this->db->prepare("UPDATE mailboxes SET name=?, host=?, port=?, username=?, password=?, inbox_folder=?, processed_folder=?, skipped_folder=? WHERE id=?");
-                $result = $stmt->execute([$name, $host, $port, $username, $password, $inbox_folder, $processed_folder, $skipped_folder, $id]);
+                $stmt = $this->db->prepare("UPDATE mailboxes SET name=?, host=?, port=?, username=?, password=?, inbox_folder=?, processed_folder=?, skipped_folder=?, problem_folder=? WHERE id=?");
+                $result = $stmt->execute([$name, $host, $port, $username, $password, $inbox_folder, $processed_folder, $skipped_folder, $problem_folder, $id]);
             } else {
                 // Keep existing password
-                $stmt = $this->db->prepare("UPDATE mailboxes SET name=?, host=?, port=?, username=?, inbox_folder=?, processed_folder=?, skipped_folder=? WHERE id=?");
-                $result = $stmt->execute([$name, $host, $port, $username, $inbox_folder, $processed_folder, $skipped_folder, $id]);
+                $stmt = $this->db->prepare("UPDATE mailboxes SET name=?, host=?, port=?, username=?, inbox_folder=?, processed_folder=?, skipped_folder=?, problem_folder=? WHERE id=?");
+                $result = $stmt->execute([$name, $host, $port, $username, $inbox_folder, $processed_folder, $skipped_folder, $problem_folder, $id]);
             }
             
             $this->logActivity("Updated Mailbox", "ID: $id");
@@ -219,8 +232,8 @@ class BounceProcessor {
                 throw new Exception("IMAP connection failed: " . imap_last_error());
             }
             
-            // Search for unread bounce messages
-            $search = 'UNSEEN';
+            // Search all messages (ignore SEEN/UNSEEN state)
+            $search = 'ALL';
             $this->logActivity('IMAP Search', $search);
             $emails = imap_search($connection, $search);
             
@@ -303,6 +316,13 @@ class BounceProcessor {
                     if (!$isTestMode) {
                         $targetFolder = !empty($mailbox['processed_folder']) ? $mailbox['processed_folder'] : 'Processed';
                         $this->logActivity('IMAP Move', sprintf('#%d -> %s', $emailNumber, $targetFolder));
+                        @imap_mail_move($connection, (string)$emailNumber, $targetFolder);
+                    }
+                } else {
+                    // Not a bounce: optionally skip or problem
+                    if (!$isTestMode) {
+                        $targetFolder = !empty($mailbox['skipped_folder']) ? $mailbox['skipped_folder'] : 'Skipped';
+                        $this->logActivity('IMAP Move', sprintf('#%d -> %s (not bounce)', $emailNumber, $targetFolder));
                         @imap_mail_move($connection, (string)$emailNumber, $targetFolder);
                     }
                 }
